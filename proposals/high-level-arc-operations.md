@@ -412,31 +412,44 @@ We then perform the previous code motion:
 We then would like to eliminate `(9)` and `(10)` by pairing them with `(3)` and
 `(8)`. Can we still do so? One way we could do this is by introducing the
 `[take]` flag. The `[take]` flag on a load_strong says that one is semantically
-loading a value from a memory location, but are taking over ownership of that
-value and thus eliding the retain. In terms of SIL this flag is defined as:
+loading a value from a memory location and are taking ownership of the value
+thus eliding the retain. In terms of SIL this flag is defined as:
 
-    %c = load_strong [take] %c_ptr : $*C
+    %x = load_strong [take] %x_ptr : $*C
 
       =>
 
-    %c = load %c_ptr : %*C
+    %x = load %x_ptr : $*C
 
-The main issue with performing such an action is that without guarantees from
-the rest of the Ownership proposal, we can not guarantee that this load is truly
-taking ownership from the stack location and there are no other uses of that
-memory location (for instance, some one could load the value and retain it and
-we have no way of preventing that).
+Why do we care about having such a `load_strong [take]` instruction when we
+could just use a `load`? The reason why is that a normal `load` has unsafe
+unowned ownership (i.e. it has no implications on ownership). We would like for
+memory that has non-trivial type to only be able to be loaded via instructions
+that maintain said ownership. We will allow for casting to trivial types as
+usual to provide such access if it is required.
 
-In order to work around such issues, we will take an approach where at first
-load_strong's are blown up at a stage of the SIL pipeline before ARC
-optimization runs (see implementation strategy below the formal definition
-section).
+Thus we have achieved the desired result:
 
-That being said, we still want to provide such a flag so that SILGen can perform
-a load_strong that is actually a take. Otherwise, SILGen would need to use a
-regulard load for such cases. Since a regular load has unsafe unowned ownership
-requirements, this would prevent us from verifying ownership at a later stage of
-implementation.
+    sil @run : $@convention(thin) () -> () {
+    bb0:
+      %c = alloc_ref $C
+      %global_c = global_addr @GLOBAL_C : $*C
+      strong_retain %c : $C
+      store %c to %global_c : $*C                                              (1)
+
+      %d = alloc_ref $D
+      %global_d = global_addr @GLOBAL_D : $*D
+      strong_retain %d : $D
+      store %d to %global_d : $*D                                              (2)
+
+      %c2 = load_strong [take] %global_c : $*C                                 (3)
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c2) : $@convention(thin) (@owned C) -> ()              (7)
+
+      %d2 = load_strong [take] %global_d : $*D                                 (5)
+      %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
+      apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
+    }
 
 # Formal Definitions
 
@@ -451,7 +464,7 @@ Define load_strong as follows:
     %x = load %x_ptr : $*C
     retain_value %x : $C
 
-We also allow for a `[take]` flag to be applied to the `load_strong`:
+We allow for a `[take]` flag to be applied to the `load_strong`:
 
     %x = load_strong [take] %x_ptr : $*Builtin.NativeObject
 
@@ -460,23 +473,28 @@ We also allow for a `[take]` flag to be applied to the `load_strong`:
     %x = load %x_ptr : $*Builtin.NativeObject
 
 The take implies that the loaded value is no longer owned by the memory location
-(i.e. it is a move). We also will allow if implementation requires a
-`[guaranteed]` flag:
+(i.e. it is a move). One concern here is are we able to truly guarantee that no
+other value will load from the given memory location given potential instruction
+re-ordering. Given this concern, we also will allow a `[guaranteed]` flag:
 
     %x = load_strong [guaranteed] %x_ptr : $*Builtin.NativeObject
     ...
-    strong_release %x : $Builtin.NativeObject
+    lifetime_barrier %x : $Builtin.NativeObject
 
       =>
 
     %x = load %x_ptr : $*Builtin.NativeObject
     ...
-    fixLifetime(%x)
+    lifetime_barrier(%x)
 
-The `[guaranteed]` flag will enable us to express that there is some other
-object that is keeping the memory location alive and even if the value is not
-retained, released, the object's lifetime must be guaranteed by the optimizer up
-to the fixLifetime.
+The `[guaranteed]` flag will enable us to express that we are loading this value
+unconditionally without retaining it and that even though the object's lifetime
+_may_ end before lifetime_barrier, the optimizer is not allowed to cause the
+object's lifetime if it ends after the lifetime_barrier to end before the
+lifetime_barrier. It remains to be seen if this becomes an issue, but if it
+does, this simple approach can fix the problem. *NOTE* The reason why we can not use a
+fix lifetime here is that a fix lifetime implies that the object's lifetime can
+not end earlier than the fix lifetime instruction.
 
 ## store_strong
 
@@ -538,7 +556,8 @@ The initial bringup strategy here is:
 7. The pass manager will be changed such that if the EnableSILOwnershipModel
    flag is set, the verifier that is run right after SILGen will have the
    EnforceSILOwnershipModel flag set. Then once ownership verification is
-   complete, the OwnershipModelEliminator pass will be run.
+   complete, the OwnershipModelEliminator pass will be run and then the normal
+   pipeline.
 
 8. Once the compiler is able to pass the bots with the
    "-enable-sil-ownership-model" flag enabled, we will turn that flag on by
@@ -553,16 +572,14 @@ store_strong instructions right after ownership verification, there will be no
 immediate affects on the optimizer and thus the optimizer changes can be done in
 parallel with the rest of the ARC optimization work.
 
-But, ideally we would like for IRGen to be what eliminates the load_strong,
-store_strong instructions, not the SILOwnershipModel eliminator. Thus we will
-need to update passes to handle these new instructions. Once this is done, we
-can move load_strong, store_strong out of the eliminator pass and allow for
-IRGen to handle the instructions themselves.
-
-The main optimizer changes can be separated into the following areas: memory
-forwarding, dead stores, ARC optimization. In all of these cases, the necessary
-changes are relatively trivial to respond to. We give a quick taste of two of
-them: store->load forwarding and ARC Code Motion.
+But, in the long run, we need IRGen to eliminate the load_strong, store_strong
+instructions, not the SILOwnershipModel eliminator, so that we can enforce
+Ownership invariants all through the SIL pipeline. Thus we will need to update
+passes to handle these new instructions. The main optimizer changes can be
+separated into the following areas: memory forwarding, dead stores, ARC
+optimization. In all of these cases, the necessary changes are relatively
+trivial to respond to. We give a quick taste of two of them: store->load
+forwarding and ARC Code Motion.
 
 ### store->load forwarding
 
@@ -603,3 +620,15 @@ operations implied by load_strong, store_strong separately from said
 instructions. This means that when we want to move these instructions since
 there is now a load/store involved, we must also consider the read/writes to
 memory.
+
+### ARC Optimization
+
+The main implication for ARC optimization is that instead of eliminating just
+retains, releases, it must be able to recognize load_strong/store_strong and set
+their flags as appropriate.
+
+### Function Signature Optimization
+
+The main implication for FSO is that FSO must be able to recognize a `store strong`
+as releasing. Then it will change the `store_strong` to be a `store_store
+[init]` and move the release into the caller.
