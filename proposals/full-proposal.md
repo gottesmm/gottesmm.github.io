@@ -1,3 +1,7 @@
+---
+layout: default
+title: "Full SIL Ownership Model"
+---
 
 # SIL Ownership Model
 

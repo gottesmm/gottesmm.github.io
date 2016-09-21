@@ -7,20 +7,27 @@
     - [The Problem](#the-problem)
     - [Defining load_strong](#defining-loadstrong)
 - [Formal Definitions](#formal-definitions)
-    - [load_strong](#loadstrong)
+    - [loads_strong](#loadsstrong)
     - [store_strong](#storestrong)
-- [Optimizer Changes](#optimizer-changes)
-    - [load->load forwarding](#load-load-forwarding)
-    - [store->load forwarding](#store-load-forwarding)
+- [Implementation Strategy](#implementation-strategy)
+    - [Initial Bringup](#initial-bringup)
+    - [Optimizer Changes](#optimizer-changes)
+        - [store->load forwarding](#store-load-forwarding)
+        - [ARC Code Motion](#arc-code-motion)
 
 <!-- markdown-toc end -->
 
 # Summary
 
 This document proposes new instructions that simplify the representation of ARC
-operations at the SIL level by eliminating the ability to perform partial
-initialization of bindings to non-trivial values. Specifically, we propose here
-two new SIL instructions:
+operations at the SIL level by:
+
+1. Eliminating the ability to perform partial initialization of bindings to
+non-trivial values.
+2. Eliminating the ability to perform unsafe unowned memory operations on
+   non-trivially typed memory.
+
+Specifically, we propose here two new SIL instructions:
 
 1. load_strong: This instruction loads a stored value and then performs a
    retain_value upon the newly loaded value.
@@ -28,12 +35,22 @@ two new SIL instructions:
    loading the old value, storing the new value, and then releasing the old
    value.
 
-Combining those operations into single SIL instructions allows the optimizer to
-avoid miscompiles that can occur due to releases being moved into the partial
-initialization region in between a load/retain, load/release. As a result of
-this, we are able to be more aggressive when performing code motion of ARC
-operations since we no longer have to worry about a release triggering a deinit
-before ownership of an object is fully taken.
+Combining those operations into single SIL instructions allows:
+
+1. The optimizer to avoid miscompiles that can occur due to releases being moved
+   into the partial initialization region in between a load/retain, load/release.
+2. The SIL verifier to ban the usage of unsafe unowned loads from memory
+   locations with non-trivial type.
+
+As a result of this:
+
+1. More aggressive ARC code motion can be performed since releases can no longer
+trigger a deinit before ownership of an object is fully taken.
+2. SIL will be able to via a use-def list represent the loading/gaining
+   ownership of a value loaded from memory in a robust manner.
+
+We elaborate on the partial initialization point in depth below since it may not
+be obvious to readers:
 
 # Partial Initialization of Loadable References in SIL
 
@@ -64,52 +81,45 @@ semantics instead of non-trivial values.
 
 ## The Problem
 
-Define the following:
+Consider the following swift program:
 
-    var GLOBAL_C : $C
-    var GLOBAL_D : $D
+    func opaque_call()
 
     final class C {
-      var x: Int = 0
-
+      var int: Int = 0
       deinit {
         opaque_call()
       }
     }
 
     final class D {
-      var x: Int = 1
+      var int: Int = 0
     }
 
-    def c_user() -> ()
-    def d_user() -> ()
-    def opaque_store_into_GLOBAL_C(C) -> ()
-    def opaque_store_into_GLOBAL_D(D) -> ()
+    var GLOBAL_C : C? = nil
+    var GLOBAL_D : D? = nil
+
+    func useC(_ c: C)
+    func useD(_ d: D)
+
+    func run() {
+        let c = C()
+        GLOBAL_C = c
+        let d = D()
+        GLOBAL_D = d
+        useC(c)
+        useD(d)
+    }
 
 Notice that both `C` and `D` have fixed layouts and separate class hierarchies,
 but `C`'s deinit has a call to the function `opaque_call` which may write to
-`GLOBAL_D` or `GLOBAL_C`. Additionally assume that both `c_user` and `d_user`
-are known to the compiler to not have any affects on instances of type `D`,
-`C` respectively. Now consider the function `foo()` in Swift:
+`GLOBAL_D` or `GLOBAL_C`. Additionally assume that both `useC` and `useD` are
+known to the compiler to not have any affects on instances of type `D`, `C`
+respectively and useC assigns `nil` to `GLOBAL_C`. Now consider the following
+valid SIL lowering for `run`:
 
-    func foo() {
-      let c_orig = C()
-      let d_orig = D()
-
-      opaque_store_into_GLOBAL_C(c_orig)
-      opaque_store_into_GLOBAL_D(d_orig)
-
-      let c = GLOBAL_C
-      let d = GLOBAL_D
-
-      c_user(c)
-      d_user(d)
-    }
-
-This lowers to approximately the following SIL:
-
-    sil_global GLOBAL_C : $C
     sil_global GLOBAL_D : $D
+    sil_global GLOBAL_C : $C
 
     final class C {
       var x: Int
@@ -120,141 +130,115 @@ This lowers to approximately the following SIL:
       var x: Int
     }
 
-    sil @c_user : $@convention(thin) () -> ()
-    sil @d_user : $@convention(thin) () -> ()
-    sil @opaque_store_into_GLOBAL_C : $@convention(thin) (@owned C) -> ()
-    sil @opaque_store_into_GLOBAL_D : $@convention(thin) (@owned D) -> ()
+    sil @useC : $@convention(thin) () -> ()
+    sil @useD : $@convention(thin) () -> ()
 
-    sil @foo : $@convention(thin) () -> () {
-    bb0():
-      // Allocate new instances of C, D.
-      %c_orig = alloc_ref $C
-      %d_orig = alloc_ref $D
+    sil @run : $@convention(thin) () -> () {
+    bb0:
+      %c = alloc_ref $C
+      %global_c = global_addr @GLOBAL_C : $*C
+      strong_retain %c : $C
+      store %c to %global_c : $*C                                              (1)
 
-      // Opaquely initialize GLOBAL_C, GLOBAL_D.
-      strong_retain %c_orig : $C
-      %c_global_init_fun = function_ref @opaque_store_into_GLOBAL_C : $@convention(thin) (@owned C) -> ()
-      apply %c_global_init_fun(%c_orig) : $@convention(thin) (@owned C) -> ()
+      %d = alloc_ref $D
+      %global_d = global_addr @GLOBAL_D : $*D
+      strong_retain %d : $D
+      store %d to %global_d : $*D                                              (2)
 
-      strong_retain %d_orig : $D
-      %d_global_init_fun = function_ref @opaque_store_into_GLOBAL_D : $@convention(thin) (@owned D) -> ()
-      apply %d_global_init_fun(%d_orig) : $@convention(thin) (@owned D) -> ()
+      %c2 = load %global_c : $*C                                               (3)
+      strong_retain %c2 : $C                                                   (4)
+      %d2 = load %global_d : $*D                                               (5)
+      strong_retain %d2 : $D                                                   (6)
 
-      // Reload from GLOBAL_C and GLOBAL_D
-      %global_c_addr = global_addr GLOBAL_C : $C
-      %c = load %global_c_addr : $*C             (1)
-      strong_retain %c : $C                      (2)
-      %global_d_addr = global_addr GLOBAL_D : $D
-      %d = load %global_d_addr : $*D             (3)
-      strong_retain %d : $D                      (4)
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c2) : $@convention(thin) (@owned C) -> ()              (7)
 
-      // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (5)
-      %d_user_fn = function_ref @d_user : $@convention(thin) (@owned D) -> ()
-      apply %d_user_fn(%d) : $@convention(thin) (@owned D) -> ()                (6)
+      %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
+      apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
 
-      // Deallocate the value from the original allocation.
-      strong_release %c_orig : $C        (7)
-      strong_release %d_orig : $D        (8)
-
-      ...
+      strong_release %d : $D                                                   (9)
+      strong_release %c : $C                                                   (10)
     }
 
 Lets optimize this function! First we perform the following operations:
 
-1. By assumption, we know that `%c_user_fn` does not perform any releases of
-   `%d`. Thus `(4)` can be moved past `(5)`.
-2. Since we know that loading from a global or retaining a value does not cause
-   any reference counts to be decremented, we can move `(2)` right before `(5)`.
-3. Since we do not allow for any dependencies in between deinits, we are also
-   allowed to swap the order of `(7)`, `(8)`.
+1. Since `(2)` is storing to an identified object that can not be `GLOBAL_C`, we
+   can store to load forward `(1)` to `(3)`.
+2. Since a retain does not block store to load forwarding, we can forward `(2)`
+   to `(5)`. But lets for the sake of argument, assume that the optimizer keeps
+   such information as an analysis and does not perform the actual load->store
+   forwarding.
+3. Even though we do not foward `(2)` to `(5)`, we can still move `(4)` over
+   `(6)` so that `(4)` is right before `(7)`.
 
-After performing such transformations, `foo` looks as follows:
+This yields (using the ' marker to designate that a register has had load-store
+forwarding applied to it):
 
-    sil @foo : $@convention(thin) () -> () {
-    bb0():
-      // Allocate new instances of C, D.
-      %c_orig = alloc_ref $C
-      %d_orig = alloc_ref $D
+    sil @run : $@convention(thin) () -> () {
+    bb0:
+      %c = alloc_ref $C
+      %global_c = global_addr @GLOBAL_C : $*C
+      strong_retain %c : $C
+      store %c to %global_c : $*C                                              (1)
 
-      // Opaquely initialize GLOBAL_C, GLOBAL_D.
-      strong_retain %c_orig : $C
-      %c_global_init_fun = function_ref @opaque_store_into_GLOBAL_C : $@convention(thin) (@owned C) -> ()
-      apply %c_global_init_fun(%c_orig) : $@convention(thin) (@owned C) -> ()
+      %d = alloc_ref $D
+      %global_d = global_addr @GLOBAL_D : $*D
+      strong_retain %d : $D
+      store %d to %global_d : $*D                                              (2)
 
-      strong_retain %d_orig : $D
-      %d_global_init_fun = function_ref @opaque_store_into_GLOBAL_D : $@convention(thin) (@owned D) -> ()
-      apply %d_global_init_fun(%d_orig) : $@convention(thin) (@owned D) -> ()
+      strong_retain %c : $C                                                    (4')
+      %d2 = load %global_d : $*D                                               (5)
+      strong_retain %d2 : $D                                                   (6)
 
-      // Reload from GLOBAL_C and GLOBAL_D
-      %global_c_addr = global_addr GLOBAL_C : $C
-      %c = load %global_c_addr : $*C             (1)
-      %global_d_addr = global_addr GLOBAL_D : $D
-      %d = load %global_d_addr : $*D             (3)
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c) : $@convention(thin) (@owned C) -> ()               (7')
 
-      // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      strong_retain %c : $C                      (2)
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (5)
+      %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
+      apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
 
-      %d_user_fn = function_ref @d_user : $@convention(thin) (@owned D) -> ()
-      strong_retain %d : $D                      (4)
-      apply %d_user_fn(%d) : $@convention(thin) (@owned D) -> ()                (6)
-
-      // Deallocate the value from the original allocation.
-      strong_release %d_orig : $D        (8)
-      strong_release %c_orig : $C        (7)
-
-      ...
+      strong_release %d : $D                                                   (9)
+      strong_release %c : $C                                                   (10)
     }
 
-Then as per the ARC optimization model, we are then able to remove `(4)` and
-`(8)` yielding:
+Then by assumption, we know that `%useC` does not perform any releases of any
+instances of class `D`. Thus `(6)` can be moved past `(7')` and we can then pair
+and eliminate `(6)` and `(9)` via the rules of ARC optimization using the
+analysis information that `%d2` and `%d` are th same due to the possibility of
+performing store->load forwarding. After performing such transformations, `run`
+looks as follows:
 
-    sil @foo : $@convention(thin) () -> () {
-    bb0():
-      // Allocate new instances of C, D.
-      %c_orig = alloc_ref $C
-      %d_orig = alloc_ref $D
+    sil @run : $@convention(thin) () -> () {
+    bb0:
+      %c = alloc_ref $C
+      %global_c = global_addr @GLOBAL_C : $*C
+      strong_retain %c : $C
+      store %c to %global_c : $*C                                              (1)
 
-      // Opaquely initialize GLOBAL_C, GLOBAL_D.
-      strong_retain %c_orig : $C
-      %c_global_init_fun = function_ref @opaque_store_into_GLOBAL_C : $@convention(thin) (@owned C) -> ()
-      apply %c_global_init_fun(%c_orig) : $@convention(thin) (@owned C) -> ()
+      %d = alloc_ref $D
+      %global_d = global_addr @GLOBAL_D : $*D
+      strong_retain %d : $D
+      store %d to %global_d : $*D
 
-      strong_retain %d_orig : $D
-      %d_global_init_fun = function_ref @opaque_store_into_GLOBAL_D : $@convention(thin) (@owned D) -> ()
-      apply %d_global_init_fun(%d_orig) : $@convention(thin) (@owned D) -> ()
+      %d2 = load %global_d : $*D                                               (5)
+      strong_retain %c : $C                                                    (4')
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c) : $@convention(thin) (@owned C) -> ()               (7')
 
-      // Reload from GLOBAL_C and GLOBAL_D
-      %global_c_addr = global_addr GLOBAL_C : $C
-      %c = load %global_c_addr : $*C             (1)
-      %global_d_addr = global_addr GLOBAL_D : $D
-      %d = load %global_d_addr : $*D             (3)
+      %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
+      apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
 
-      // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      strong_retain %c : $C                      (2)
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (5)
-
-      %d_user_fn = function_ref @d_user : $@convention(thin) (@owned D) -> ()
-      apply %d_user_fn(%d) : $@convention(thin) (@owned D) -> ()                (6)
-
-      // Deallocate the value from the original allocation.
-      strong_release %c_orig : $C        (7)
-
-      ...
+      strong_release %c : $C                                                   (10)
     }
 
-Now by assumption, we know that `%d_user_fn` does not touch any instances of
-class `C` and `%c` does not contain any ivars of type `%d` and is final so none
-can be added. At first glance, this seems to suggest that we can move `(7)`
-before `(6)` and thus shorten the lifetime of `%c` and then (potentially)
-eliminate a retain `(2)`, release `(7)` pair. But is this a safe optimization
-perform? Absolutely Not! Why? The destructor of `%c` calls an opaque function
-that _could_ potentially write to `%global_d_addr`. If that does occur, we will
-be passing `%d`, an already deallocated object to `%d_user_fn`, an illegal
+Now by assumption, we know that `%useD_func` does not touch any instances of
+class `C` and `%c` does not contain any ivars of type `D` and is final so none
+can be added. At first glance, this seems to suggest that we can move `(10)`
+before `(8')` and then pair/eliminate `(4')` and `(10)`. But is this a safe
+optimization perform?  Absolutely Not! Why? Remember that since `useC_func`
+assigns `nil` to `GLOBAL_C`, after `(7')`, `%c` could have a reference count
+of 1.  Thus `(10)` _may_ invoke the destructor of `C`. Since this destructor
+calls an opaque function that _could_ potentially write to `GLOBAL_D`, we may be
+be passing `%d2`, an already deallocated object to `%useD_func`, an illegal
 optimization!
 
 Lets think a bit more about this example and consider this example at the
@@ -263,9 +247,10 @@ not allow for user level code to create dependencies from the body of the
 destructor into the normal control flow that has called it. This means that
 there are two valid results of this code:
 
-- Operation Sequence 1: No optimization is performed and `%d` is passed to `%d_user_fn`.
-- Operation Sequence 2: We shorten the lifetime of `%c` before `%d_user_fn` and
-   a different instance of `$D` is passed into `%d_user_fn`.
+- Operation Sequence 1: No optimization is performed and `%d2` is passed to
+  `%useD_func`.
+- Operation Sequence 2: We shorten the lifetime of `%c` before `%useD_func` and
+   a different instance of `$D` is passed into `%useD_func`.
 
 The fact that 1 occurs without optimization is just as a result of an
 implementation detail of SILGen. 2 is also a valid sequence of operations.
@@ -277,37 +262,38 @@ Given that:
 2. We provide constructs to ensure appropriate lifetimes via the usage of
    constructs such as fix_lifetime.
 
-we need to figure out how to express our optimization such that 2
-happens. Remember that one of the first optimizations that we performed at the
-beginning was to move `(4)` over `(5)`, i.e., transform this:
+We need to figure out how to express our optimization such that 2
+happens. Remember that one of the optimizations that we performed at the
+beginning was to move `(6)` over `(7')`, i.e., transform this:
 
+      %d = alloc_ref $D
       %global_d_addr = global_addr GLOBAL_D : $D
-      %d = load %global_d_addr : $*D             (3)
-      strong_retain %d : $D                      (4)
+      %d = load %global_d_addr : $*D             (5)
+      strong_retain %d : $D                      (6)
 
       // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (5)
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c) : $@convention(thin) (@owned C) -> ()                (7')
 
 into:
 
       %global_d_addr = global_addr GLOBAL_D : $D
-      %d = load %global_d_addr : $*D             (3)
+      %d2 = load %global_d_addr : $*D             (5)
 
       // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (5)
-      strong_retain %d : $D                      (4)
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c) : $@convention(thin) (@owned C) -> ()                (7')
+      strong_retain %d2 : $D                      (6)
 
 This transformation in Swift corresponds to transforming:
 
       let d = GLOBAL_D
-      c_user(c)
+      useC(c)
 
 to:
 
       let d_raw = load_d_value(GLOBAL_D)
-      c_user(c)
+      useC(c)
       let d = take_ownership_of_d(d_raw)
 
 This is clearly an instance where we have moved a side-effect in between the
@@ -315,90 +301,43 @@ loading of the data and the taking ownership of such data, that is before the
 `let` is fully initialized. What if instead of just moving the retain, we moved
 the entire let statement? This would then result in the following swift code:
 
-      c_user(c)
+      useC(c)
       let d = GLOBAL_D
 
-and would correspond to the following Swift snippet:
- 
+and would correspond to the following SIL snippet:
+
       %global_d_addr = global_addr GLOBAL_D : $D
 
       // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (5)
-      %d = load %global_d_addr : $*D             (3)
-      strong_retain %d : $D                      (4)     
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c) : $@convention(thin) (@owned C) -> ()                (7')
+      %d2 = load %global_d_addr : $*D                                         (5)
+      strong_retain %d2 : $D                                                  (6)
 
 Moving the load with the strong_retain to ensure that the full initialization is
-performed even after code motion causes our final SIL to look as follows:
+performed even after code motion causes our SIL to look as follows:
 
-    sil @foo : $@convention(thin) () -> () {
-    bb0():
-      // Allocate new instances of C, D.
-      %c_orig = alloc_ref $C
-      %d_orig = alloc_ref $D
+    sil @run : $@convention(thin) () -> () {
+    bb0:
+      %c = alloc_ref $C
+      %global_c = global_addr @GLOBAL_C : $*C
+      strong_retain %c : $C
+      store %c to %global_c : $*C                                              (1)
 
-      // Opaquely initialize GLOBAL_C, GLOBAL_D.
-      strong_retain %c_orig : $C
-      %c_global_init_fun = function_ref @opaque_store_into_GLOBAL_C : $@convention(thin) (@owned C) -> ()
-      apply %c_global_init_fun(%c_orig) : $@convention(thin) (@owned C) -> ()
+      %d = alloc_ref $D
+      %global_d = global_addr @GLOBAL_D : $*D
+      strong_retain %d : $D
+      store %d to %global_d : $*D
 
-      strong_retain %d_orig : $D
-      %d_global_init_fun = function_ref @opaque_store_into_GLOBAL_D : $@convention(thin) (@owned D) -> ()
-      apply %d_global_init_fun(%d_orig) : $@convention(thin) (@owned D) -> ()
+      strong_retain %c : $C                                                    (4')
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c) : $@convention(thin) (@owned C) -> ()               (7')
 
-      // Reload from GLOBAL_C and GLOBAL_D
-      %global_c_addr = global_addr GLOBAL_C : $C
-      %c = load %global_c_addr : $*C             (1)
-      %global_d_addr = global_addr GLOBAL_D : $D
+      %d2 = load %global_d : $*D                                               (5)
+      %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
+      apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
 
-      // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      strong_retain %c : $C                      (2)
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (5)
-
-      %d = load %global_d_addr : $*D             (3)
-      %d_user_fn = function_ref @d_user : $@convention(thin) (@owned D) -> ()
-      apply %d_user_fn(%d) : $@convention(thin) (@owned D) -> ()                (6)
-
-      // Deallocate the value from the original allocation.
-      strong_release %c_orig : $C        (7)
-
-      ...
-    }
-
-Notice how now if we move `(7)` over `(3)` and `(6)` now, we get the following SIL:
-
-    sil @foo : $@convention(thin) () -> () {
-    bb0():
-      // Allocate new instances of C, D.
-      %c_orig = alloc_ref $C
-      %d_orig = alloc_ref $D
-
-      // Opaquely initialize GLOBAL_C, GLOBAL_D.
-      strong_retain %c_orig : $C
-      %c_global_init_fun = function_ref @opaque_store_into_GLOBAL_C : $@convention(thin) (@owned C) -> ()
-      apply %c_global_init_fun(%c_orig) : $@convention(thin) (@owned C) -> ()
-
-      strong_retain %d_orig : $D
-      %d_global_init_fun = function_ref @opaque_store_into_GLOBAL_D : $@convention(thin) (@owned D) -> ()
-      apply %d_global_init_fun(%d_orig) : $@convention(thin) (@owned D) -> ()
-
-      // Reload from GLOBAL_C and GLOBAL_D
-      %global_c_addr = global_addr GLOBAL_C : $C
-      %c = load %global_c_addr : $*C             (1)
-      %global_d_addr = global_addr GLOBAL_D : $D
-
-      // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      strong_retain %c : $C                      (2)
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (5)
-      strong_release %c_orig : $C        (7)
-
-      %d = load %global_d_addr : $*D             (3)
-      %d_user_fn = function_ref @d_user : $@convention(thin) (@owned D) -> ()
-      apply %d_user_fn(%d) : $@convention(thin) (@owned D) -> ()                (6)
-
-      ...
+      strong_release %c : $C                                                   (10)
     }
 
 Giving us the exact result that we want: Operation Sequence 2!
@@ -412,64 +351,69 @@ to express this operation as a `load_strong` instruction. Lets define the
     %1 = load_strong %0 : $*C
 
       =>
-  
+
     %1 = load %0 : $*C
     retain_value %1 : $C
 
 Now lets transform our initial example to use this instruction:
 
-    sil @foo : $@convention(thin) () -> () {
-    bb0():
-      ...
+Notice how now if we move `(7)` over `(3)` and `(6)` now, we get the following SIL:
 
-      // Reload from GLOBAL_C and GLOBAL_D
-      %global_c_addr = global_addr GLOBAL_C : $C
-      %c = load_strong %global_c_addr : $*C      (1)
-      %global_d_addr = global_addr GLOBAL_D : $D
-      %d = load_strong %global_d_addr : $*D      (2)
+    sil @run : $@convention(thin) () -> () {
+    bb0:
+      %c = alloc_ref $C
+      %global_c = global_addr @GLOBAL_C : $*C
+      strong_retain %c : $C
+      store %c to %global_c : $*C                                              (1)
 
-      // Call the user functions passing in the instances that we loaded from the globals.
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (3)
-      %d_user_fn = function_ref @d_user : $@convention(thin) (@owned D) -> ()
-      apply %d_user_fn(%d) : $@convention(thin) (@owned D) -> ()                (4)
+      %d = alloc_ref $D
+      %global_d = global_addr @GLOBAL_D : $*D
+      strong_retain %d : $D
+      store %d to %global_d : $*D                                              (2)
 
-      // Deallocate the value from the original allocation.
-      strong_release %c_orig : $C        (5)
-      strong_release %d_orig : $D        (6)
+      %c2 = load_strong %global_c : $*C                                        (3)
+      %d2 = load_strong %global_d : $*D                                        (5)
 
-      ...
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c2) : $@convention(thin) (@owned C) -> ()              (7)
+
+      %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
+      apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
+
+      strong_release %d : $D                                                   (9)
+      strong_release %c : $C                                                   (10)
     }
 
 We then perform the previous code motion:
 
-    sil @foo : $@convention(thin) () -> () {
-    bb0():
-      ...
+    sil @run : $@convention(thin) () -> () {
+    bb0:
+      %c = alloc_ref $C
+      %global_c = global_addr @GLOBAL_C : $*C
+      strong_retain %c : $C
+      store %c to %global_c : $*C                                              (1)
 
-      // Reload from GLOBAL_C and GLOBAL_D
-      %global_c_addr = global_addr GLOBAL_C : $C
-      %global_d_addr = global_addr GLOBAL_D : $D
+      %d = alloc_ref $D
+      %global_d = global_addr @GLOBAL_D : $*D
+      strong_retain %d : $D
+      store %d to %global_d : $*D                                              (2)
 
-      // Call the user functions passing in the instances that we loaded from the globals.
-      %c = load_strong %global_c_addr : $*C      (1)
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (3)
-      strong_release %c_orig : $C        (5)
+      %c2 = load_strong %global_c : $*C                                        (3)
+      %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
+      apply %useC_func(%c2) : $@convention(thin) (@owned C) -> ()              (7)
+      strong_release %d : $D                                                   (9)
 
-      %d = load_strong %global_d_addr : $*D      (2)
-      %d_user_fn = function_ref @d_user : $@convention(thin) (@owned D) -> ()
-      apply %d_user_fn(%d) : $@convention(thin) (@owned D) -> ()                (4)
-      strong_release %d_orig : $D        (6)
-
-      ...
+      %d2 = load_strong %global_d : $*D                                        (5)
+      %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
+      apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
+      strong_release %c : $C                                                   (10)
     }
 
-We then would like to eliminate `(7)` and `(8)`. Can we still do so? The way
-this is done by introducing the `[take]` flag. The `[take]` flag on a
-load_strong says that one is semantically loading a value from a memory
-location, but are taking over ownership of that value and thus eliding the
-retain. In terms of SIL this flag is defined as:
+We then would like to eliminate `(9)` and `(10)` by pairing them with `(3)` and
+`(8)`. Can we still do so? One way we could do this is by introducing the
+`[take]` flag. The `[take]` flag on a load_strong says that one is semantically
+loading a value from a memory location, but are taking over ownership of that
+value and thus eliding the retain. In terms of SIL this flag is defined as:
 
     %c = load_strong [take] %c_ptr : $*C
 
@@ -477,64 +421,66 @@ retain. In terms of SIL this flag is defined as:
 
     %c = load %c_ptr : %*C
 
-Why do we care about having such a `load_strong [take]` instruction when we
-could just use a `load`? The reason why is that to ensure correctness in
-ownership in the compiler, we wish to create a requirement that `load` has a
-result with `@unsafe @unowned` ownership, while `load_strong [take]` has an
-`@owned` ownership. Even without Ownership at the SIL level, we can still
-enforce some of this invariant by in the SILVerifier saying that a load can not
-be applied to memory locations that are not of trivial type.
+The main issue with performing such an action is that without guarantees from
+the rest of the Ownership proposal, we can not guarantee that this load is truly
+taking ownership from the stack location and there are no other uses of that
+memory location (for instance, some one could load the value and retain it and
+we have no way of preventing that).
 
-Thus when ARC optimization is run, we perform pairings and get back a version of
-the final SIL that we wanted: 
+In order to work around such issues, we will take an approach where at first
+load_strong's are blown up at a stage of the SIL pipeline before ARC
+optimization runs (see implementation strategy below the formal definition
+section).
 
-    sil @foo : $@convention(thin) () -> () {
-    bb0():
-      ...
-
-      // Reload from GLOBAL_C and GLOBAL_D
-      %global_c_addr = global_addr GLOBAL_C : $C
-      %global_d_addr = global_addr GLOBAL_D : $D
-
-      // Call the user functions passing in the instances that we loaded from the globals.
-      %c = load_strong [take] %global_c_addr : $*C      (1)
-      %c_user_fn = function_ref @c_user : $@convention(thin) (@owned C) -> ()
-      apply %c_user_fn(%c) : $@convention(thin) (@owned C) -> ()                (3)
-
-      %d = load_strong [take] %global_d_addr : $*D      (2)
-      %d_user_fn = function_ref @d_user : $@convention(thin) (@owned D) -> ()
-      apply %d_user_fn(%d) : $@convention(thin) (@owned D) -> ()                (4)
-
-      ...
-    }
+That being said, we still want to provide such a flag so that SILGen can perform
+a load_strong that is actually a take. Otherwise, SILGen would need to use a
+regulard load for such cases. Since a regular load has unsafe unowned ownership
+requirements, this would prevent us from verifying ownership at a later stage of
+implementation.
 
 # Formal Definitions
 
-## load_strong
+## loads_strong
 
-Following the lead of load_unowned and load_weak, we allow for a [take] flag to
-be applied to the instruction implying that we have two forms. The full
-load_strong is defined as follows:
+Define load_strong as follows:
 
     %x = load_strong %x_ptr : $*C
 
       =>
-  
+
     %x = load %x_ptr : $*C
     retain_value %x : $C
 
-Since a load_strong is meant to be viewed as a manner of creating a new
-reference to a stored value, it can not be reduced to a load, retain until 
+We also allow for a `[take]` flag to be applied to the `load_strong`:
 
     %x = load_strong [take] %x_ptr : $*Builtin.NativeObject
 
-      => 
+      =>
 
     %x = load %x_ptr : $*Builtin.NativeObject
 
+The take implies that the loaded value is no longer owned by the memory location
+(i.e. it is a move). We also will allow if implementation requires a
+`[guaranteed]` flag:
+
+    %x = load_strong [guaranteed] %x_ptr : $*Builtin.NativeObject
+    ...
+    strong_release %x : $Builtin.NativeObject
+
+      =>
+
+    %x = load %x_ptr : $*Builtin.NativeObject
+    ...
+    fixLifetime(%x)
+
+The `[guaranteed]` flag will enable us to express that there is some other
+object that is keeping the memory location alive and even if the value is not
+retained, released, the object's lifetime must be guaranteed by the optimizer up
+to the fixLifetime.
+
 ## store_strong
 
-Now define a store_strong as follows:
+Define a store_strong as follows:
 
     store_strong %x to %x_ptr : $*C
 
@@ -555,51 +501,70 @@ no previous value in the memory location:
     retain_value %new_x : $C
     store %new_x to %x_ptr : $*C
 
-# Optimizer Changes
+# Implementation Strategy
 
-The main optimizer changes can be separated into the following areas: load->load
-forwarding, dead store elimination, store->load forwarding, ARC
-optimization, mem2reg. We go through each optimization below:
+## Initial Bringup
 
-## load->load forwarding
+The initial bringup strategy here is:
 
-Currently we perform load -> load forwarding as follows:
+1. A new flag will be added to SILOptions: "EnableSILOwnershipModel". This flag
+   will be disabled by default and will able to be triggered by passing into the
+   frontend the -enable-sil-ownership-model flag.
 
-    %x = load %x_ptr : $C
-    ... NO SIDE EFFECTS THAT TOUCH X_PTR ...
-    %y = load %x_ptr : $C
-    use(%y)
+2. Bots will be brought up to test the compiler with this flag
+   enabled. Specifically, we will create a separate RA-OSX+simulatrs, RA-Device,
+   RA-Linux. These will run once a day during bring up. As we get closer to
+   turning on this code, we will run it in a polling configuration.
 
-      =>
-    
-    %x = load %x_ptr : $C
-    ...
-    use(%x)
+3. load_strong, store_strong will be implemented in SIL but will not be emitted
+   by SILGen. IRGen/serialization/printing/parsing support will be implemented.
 
-In a load_strong world, the main implication is that the second load from
-`%x_ptr` is not just a load, but also the creation of a new ownership
-state. This means that if we are performing a full `load_strong`, we must insert
-a retain and if we are performing a `load_strong [take]`, we just forward as
-before. Thus:
+4. A small pass called the "OwnershipModelEliminator" will be
+   implemented. Initially it will just to blow up load_strong/store_strong into
+   their constituent operations. It will serve as a grab bag pass to eliminate
+   parts of the SIL Ownership Model from the IR to ensure that we do not lose
+   performance while bringing up this code.
 
-    %x = load_strong %x_ptr : $C
-    ... NO SIDE EFFECTS THAT WRITE TO X_PTR ...
-    %y = load_strong %x_ptr : $C
-    readonly_use1(%y)
-    ... NO SIDE EFFECTS THAT WRITE TO X_PTR ...
-    %z = load_strong [take] %x_ptr : $C
-    readonly_use2(%z)
+5. The verifier will have a disabled by default option called
+   "EnforceSILOwnershipModel" added to it. If the option is set, the verifier
+   will verify that unsafe unowned loads, stores are not used to load from
+   non-trivial memory locations. This flag will be used to trigger further
+   verification at later stages of the implementation of the SIL Ownership model
+   as well.
 
-      =>
+6. SILGen will be changed to emit load_strong, store_strong instructions when
+   the EnableSILOwnershipModel flag is set.
 
-    %x = load_strong %x_ptr : $C
-    ... NO SIDE EFFECTS THAT WRITE TO X_PTR ...
-    strong_retain %x
-    readonly_use1(%x)
-    ... NO SIDE EFFECTS THAT WRITE TO X_PTR ...
-    readonly_use2(%x)
+7. The pass manager will be changed such that if the EnableSILOwnershipModel
+   flag is set, the verifier that is run right after SILGen will have the
+   EnforceSILOwnershipModel flag set. Then once ownership verification is
+   complete, the OwnershipModelEliminator pass will be run.
 
-## store->load forwarding
+8. Once the compiler is able to pass the bots with the
+   "-enable-sil-ownership-model" flag enabled, we will turn that flag on by
+   default on trunk and after a cooling down period, move all of the
+   aforementioned code in front of the flag. After that point, we will reuse
+   said flag for other stages of the implementation of the Ownership Model.
+
+## Optimizer Changes
+
+Since the SILOwnershipModel eliminator will eliminate the load_strong,
+store_strong instructions right after ownership verification, there will be no
+immediate affects on the optimizer and thus the optimizer changes can be done in
+parallel with the rest of the ARC optimization work.
+
+But, ideally we would like for IRGen to be what eliminates the load_strong,
+store_strong instructions, not the SILOwnershipModel eliminator. Thus we will
+need to update passes to handle these new instructions. Once this is done, we
+can move load_strong, store_strong out of the eliminator pass and allow for
+IRGen to handle the instructions themselves.
+
+The main optimizer changes can be separated into the following areas: memory
+forwarding, dead stores, ARC optimization. In all of these cases, the necessary
+changes are relatively trivial to respond to. We give a quick taste of two of
+them: store->load forwarding and ARC Code Motion.
+
+### store->load forwarding
 
 Currently we perform store->load forwarding as follows:
 
@@ -631,34 +596,10 @@ same. Thus without any loss of generality, lets consider solely `store_strong`.
     strong_retain %x
     use(%x)
 
-Then for `store_strong` and `load_strong [take]`:
+### ARC Code Motion
 
-    store_strong %x to %x_ptr : $C
-    ... NO SIDE EFFECTS THAT TOUCH X_PTR ...
-    %y = load_strong [take] %x_ptr : $C
-    use(%y)
-
-      =>
-
-    store_strong %x to %x_ptr : $C
-    ... NO SIDE EFFECTS THAT TOUCH X_PTR ...
-    use(%x)
-
-## Dead Store Elimination
-
-Dead store elimination is changed as follows:
-
-1. If the dead `store_strong` is a full `store_strong`, we just delete the old
-   dead_store.
-2. If the dead `store_strong` is a `store_strong [init]`, then the
-post-dominating store 
-Dead store elimination works just like before, except that the dead store's
-attribute must be taken on by the post-dominating store. I.e.:
-
-    store_strong %x to [init] %x_ptr : $C
-    store_strong %y to %x_ptr : $C
-
-       =>
-    
-    store_strong %y to [init] %x_ptr : $C
-    
+The main implication for ARC Code Motion is that we can no longer move the ARC
+operations implied by load_strong, store_strong separately from said
+instructions. This means that when we want to move these instructions since
+there is now a load/store involved, we must also consider the read/writes to
+memory.
