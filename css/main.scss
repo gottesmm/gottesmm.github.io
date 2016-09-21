@@ -1,39 +1,27 @@
+x---
+# Only the main Sass file needs front matter (the dashes are enough)
+---
+
 ---
 # Only the main Sass file needs front matter (the dashes are enough)
 ---
-@charset "utf-8";
-
-// Our variables
-$base-font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
-$base-font-size:   16px;
-$base-font-weight: 400;
-$small-font-size:  $base-font-size * 0.875;
-$base-line-height: 1.5;
-
-$spacing-unit:     30px;
-
-$text-color:       #111;
-$background-color: #fdfdfd;
-$brand-color:      #2a7ae2;
-
-$grey-color:       #828282;
-$grey-color-light: lighten($grey-color, 40%);
-$grey-color-dark:  darken($grey-color, 25%);
-
-// Width of the content area
-$content-width:    800px;
-
-$on-palm:          600px;
-$on-laptop:        800px;
-
-// Minima also includes a mixin for defining media queries.
-// Use media queries like this:
-// @include media-query($on-palm) {
-//     .wrapper {
-//         padding-right: $spacing-unit / 2;
-//         padding-left: $spacing-unit / 2;
-//     }
-// }
-
-// Import partials from the `minima` theme.
-@import "minima";
+@import url("http://swift.org/assets/stylesheets/application.css");
+// The following should be moved to the Swift.org stylesheet
+article {
+pre.good {
+background: #E6FFE5;
+border-color: #C0FFBC;
+}
+pre.good:before {
+content: "✅";
+float: right;
+}
+pre.bad {
+background: #F9E2E4;
+border-color: #F6B7BE;
+}
+pre.bad:before {
+content: "⛔️";
+float: right;
+}
+}
