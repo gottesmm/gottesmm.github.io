@@ -19,9 +19,11 @@ model to be statically verified at compile time. This will result in:
 
 1. The ability to quickly triage and determine the source of ARC errors from the
    optimizer and SILGen.
-2. More aggressive ARC optimization using additional semantic information such
+2. A drastic simplification of the ARC optimization problem allowing for the ARC
+   optimizer to be more maintainable, simpler, and use less compile time.
+3. More aggressive ARC optimization using additional semantic information such
    as "semantic pairings".
-3. Creating the necessary information for other forms of ownership to be added
+4. Creating the necessary information for other forms of ownership to be added
    to the SIL IR such as move semantics.
 
 # The Engineering Plan
