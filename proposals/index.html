@@ -1,0 +1,11 @@
+---
+layout: default
+title: Proposals
+---
+{% for page in site.pages %}
+  {% if page.categories contains 'proposals' %}
+	<div class="page">
+		<h3 class="title"><a href="{{ page.url }}">{{ page.title }}</a></h3>
+	</div>
+  {% endif %}
+{% endfor %}

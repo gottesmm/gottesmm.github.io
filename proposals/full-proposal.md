@@ -1,6 +1,7 @@
 ---
 layout: default
-title: "Full SIL Ownership Model"
+title: SIL Ownership Model (Full Document)
+categories: proposals
 ---
 
 # SIL Ownership Model

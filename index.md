@@ -1,15 +1,12 @@
 ---
 layout: default
-title: "mgottesman's swift working documents"
-date: 2016-00-20 17:19:42 -0700
+title: Michael Gottesman's Working Swift Documents
 ---
 
-# Proposals
+This site contains drafts and random ideas about Swift, Performance, and
+Compiler Development. It is not intended to be a personal blog, but rather an
+"idea repository".
 
-{% for p in site.pages %}
-{{p.path}}
-  {% if p.path.include? "proposal" %}
-  - [{{p.title}}]({{p.url}})
-  {% endif %}
-{% endfor %}
+[Proposal Drafts](proposals)
 
+[Idea Repository](ideas)
