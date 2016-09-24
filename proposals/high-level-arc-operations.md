@@ -1,7 +1,10 @@
 ---
+layout: proposal
 title: High Level ARC Operations
 categories: proposals
 ---
+
+# {{ page.title }}
 
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-generate-toc again -->
 **Table of Contents**
