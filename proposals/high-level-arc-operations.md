@@ -1,5 +1,4 @@
 ---
-layout: default
 title: High Level ARC Operations
 categories: proposals
 ---
