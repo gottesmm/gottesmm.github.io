@@ -1,3 +1,8 @@
+---
+layout: proposal
+title: SIL Ownership Model (Newer Full Document)
+categories: proposals
+---
 
 # Preliminary Information
 
