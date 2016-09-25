@@ -1,10 +1,14 @@
+---
+layout: proposal
+title: Semantic ARC High Level Proposal
+categories: proposals
+---
 
 # Preface
 
-This year a major piece of work at the SIL level is Semantic ARC. This email
-contains a high level description (i.e. the vision) that describes the problems
-that this model will solve and provide a broad overview of the engineering plan
-that will be needed to achieve this.
+For Swift 4, we plan to introduce “Semantic ARC,” a major overhaul of ownership
+in SIL. This document outlines the problems solved by "Semantic ARC", how it
+works, and an engineering plan for implementing it.
 
 # The Problem and the Goal
 
