@@ -1,5 +1,5 @@
 ---
-layout: default
+layout: proposal
 title: SIL Ownership Model (Full Document)
 categories: proposals
 ---
