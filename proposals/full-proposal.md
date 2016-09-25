@@ -1,6 +1,6 @@
 ---
 layout: proposal
-title: SIL Ownership Model (Full Document)
+title: SIL Ownership Model (Old Full Document)
 categories: proposals
 ---
 
