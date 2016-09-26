@@ -15,7 +15,7 @@ categories: proposals
     - [store_strong](#storestrong)
 - [Implementation](#implementation)
     - [Goals](#goals)
-    - [Initial Infrastructure](#initial-infrastructure)
+    - [Plan](#plan)
     - [Optimizer Changes](#optimizer-changes)
         - [store->load forwarding](#store-load-forwarding)
         - [ARC Code Motion](#arc-code-motion)
@@ -26,7 +26,6 @@ categories: proposals
     - [Case Study: Partial Initialization and load_strong](#case-study-partial-initialization-and-loadstrong)
         - [The Problem](#the-problem)
         - [Defining load_strong](#defining-loadstrong)
-        - [load_strong [guaranteed]](#loadstrong-guaranteed)
 
 <!-- markdown-toc end -->
 
