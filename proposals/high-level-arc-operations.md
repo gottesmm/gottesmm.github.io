@@ -42,9 +42,9 @@ This will allow for:
 
 1. eliminating optimizer miscompiles that occur due to releases being moved into
    the region in between a `load`/`retain`, `load`/`release`,
-   `store`/`release`. (For more information see the appendix).
-2. the modeling of `load`/`store` as having `unsafe unowned` ownership
-   semantics. This will be enforced via the verifier.
+   `store`/`release`. (For a specific example, see the appendix).
+2. modeling `load`/`store` as having `unsafe unowned` ownership semantics. This
+   will be enforced via the verifier.
 3. more aggressive ARC code motion.
 
 # Definitions
@@ -70,9 +70,21 @@ We also allow for a `[take]` flag to be applied to the `load_strong`:
 
 `[take]` implies that the memory location no longer owns the loaded object (i.e.
 it is a move). Loading the memory location again without reinitialization is
-thus illegal. That condition is difficult for us to guarantee today Even though `[take]` could be used to element retains from
-load_strong today, we do not have any guarantees that such an additional load
-_cannot_ occur.
+thus illegal. Enforcing that condition cannot be guaranteed with today's SIL, so
+we provide an additional alternative: `load_strong [guaranteed]`:
+
+    %x = load_strong [guaranteed] %x_ptr : $*Builtin.NativeObject
+    ...
+    fixLifetime(%x)
+
+      =>
+
+    %x = load %x_ptr : $*Builtin.NativeObject
+    ...
+    fixLifetime(%x)
+
+The `[guaranteed]` flag will express that the loaded object's lifetime can not
+be shortened before the `fixLifetime` instruction.
 
 ## store_strong
 
@@ -103,54 +115,57 @@ no previous value in the memory location:
 
 The goals which guide our bring up are:
 
-1. Zero impact on other compiler developers until the feature is fully
+1. zero impact on other compiler developers until the feature is fully
    developed. This implies all work will be done behind a flag.
-2. Separation of the implementation of this feature from updating passes. This
-   implies a two stage implementation.
+2. separation of feature implementation from pass updates.
 
-## Initial Infrastructure
+## Plan
+
+We begin by adding initial infrastructure for our development. This means:
 
 1. A disabled by default flag called "EnableSILOwnershipModel" will be added to
-   SILOptions.
-
-2. A false by default option called "-enable-sil-ownership-mode" will be added
-   to the swift frontend. This will cause swift to set the SILOption flag.
+   SILOptions. A false by default option called "-enable-sil-ownership-mode"
+   will be added to the swift frontend. This will cause
+   "EnableSILOwnershipModel" flag to be set SILOptions.
 
 2. Bots will be brought up to test the compiler with
    "-enable-sil-ownership-model" set to true. Specifically, we will create a
    separate RA-OSX+simulators, RA-Device, RA-Linux. Initially These will run
-   once a day. As
+   once a day but as the feature gets closer to completion will run in a polling
+   configuration.
 
-3. load_strong, store_strong will be implemented in SIL but will not be emitted
-   by SILGen. IRGen/serialization/printing/parsing support will be implemented.
+Now that change isolation is guaranteed, we develop building blocks for the
+optimization:
 
-4. A small pass called the "OwnershipModelEliminator" will be
-   implemented. Initially it will just to blow up load_strong/store_strong into
-   their constituent operations. It will serve as a grab bag pass to eliminate
-   parts of the SIL Ownership Model from the IR to ensure that we do not lose
-   performance while bringing up this code.
+1. load_strong, store_strong will be implemented in SIL but will not be emitted
+by SILGen. IRGen/serialization/printing/parsing support will be implemented.
 
-5. The verifier will have a disabled by default option called
-   "EnforceSILOwnershipModel" added to it. If the option is set, the verifier
-   will verify that unsafe unowned loads, stores are not used to load from
-   non-trivial memory locations. This flag will be used to trigger further
-   verification at later stages of the implementation of the SIL Ownership model
-   as well.
+2. A small pass called the "OwnershipModelEliminator" will be
+implemented. Initially it will just to blow up load_strong/store_strong into
+their constituent operations. It will serve as a grab bag pass to eliminate
+parts of the SIL Ownership Model from the IR to ensure that we do not lose
+performance while bringing up this code.
 
-6. SILGen will be changed to emit load_strong, store_strong instructions when
+3. The verifier will have a disabled by default option called
+"EnforceSILOwnershipModel" added to it. If the option is set, the verifier will
+verify that unsafe unowned loads, stores are not used to load from non-trivial
+memory locations. This flag will be used to trigger further verification at
+later stages of the implementation of the SIL Ownership model as well.
+
+Finally, we wire up the building blocks:
+
+1. The pass manager will be changed such that if the SILOption
+EnableSILOwnershipModel flag is set, the verifier that is run right after SILGen
+will have the EnforceSILOwnershipModel flag set. Then once ownership
+verification is complete, the OwnershipModelEliminator pass will be run and then
+the normal pipeline.
+
+2. SILGen will be changed to emit load_strong, store_strong instructions when
    the EnableSILOwnershipModel flag is set.
 
-7. The pass manager will be changed such that if the EnableSILOwnershipModel
-   flag is set, the verifier that is run right after SILGen will have the
-   EnforceSILOwnershipModel flag set. Then once ownership verification is
-   complete, the OwnershipModelEliminator pass will be run and then the normal
-   pipeline.
-
-8. Once the compiler is able to pass the bots with the
-   "-enable-sil-ownership-model" flag enabled, we will turn that flag on by
-   default on trunk and after a cooling down period, move all of the
-   aforementioned code in front of the flag. After that point, we will reuse
-   said flag for other stages of the implementation of the Ownership Model.
+Then we turn on the optimization by default once the compiler is able to pass
+the bots with the "-enable-sil-ownership-model" flag enabled. After a cooling
+down period, all of the aforementioned code will then be enabled by default.
 
 ## Optimizer Changes
 
@@ -621,28 +636,3 @@ Thus we have achieved the desired result:
       apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
     }
 
-### load_strong [guaranteed]
-
-As an
-Given the lack of any such constraints today, it may be impossible to guarantee
-that no other value will be loaded from a memory location after the take. Given
-this concern, we also will allow a `[guaranteed]` flag:
-
-    %x = load_strong [guaranteed] %x_ptr : $*Builtin.NativeObject
-    ...
-    lifetime_barrier %x : $Builtin.NativeObject
-
-      =>
-
-    %x = load %x_ptr : $*Builtin.NativeObject
-    ...
-    lifetime_barrier(%x)
-
-The `[guaranteed]` flag will enable us to express that we are loading this value
-unconditionally without retaining it and that even though the object's lifetime
-_may_ end before lifetime_barrier, the optimizer is not allowed to cause the
-object's lifetime if it ends after the lifetime_barrier to end before the
-lifetime_barrier. It remains to be seen if this becomes an issue, but if it
-does, this simple approach can fix the problem. *NOTE* The reason why we can not
-use a fix lifetime here is that a fix lifetime implies that the object's
-lifetime can not end earlier than the fix lifetime instruction.
