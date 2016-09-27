@@ -33,9 +33,9 @@ categories: proposals
 
 This document proposes:
 
-1. adding the `load_strong`, `store_strong` instructions to SIL.
-2. banning the ability to load/store `non-trivial` strongly reference counted
-   values with any other instructions besides `load_strong`, `store_strong`.
+1. adding the `load_strong`, `store_strong` instructions to SIL. These can only
+   be used with memory locations of `non-trivial` type.
+2. banning the use of `load`, `store` on values of `non-trivial` type.
 
 This will allow for:
 
@@ -50,7 +50,8 @@ This will allow for:
 
 ## load_strong
 
-Define load_strong as follows:
+We propose three different forms of load_strong differentiated via flags. First
+define `load_strong` as follows:
 
     %x = load_strong %x_ptr : $*C
 
@@ -59,7 +60,7 @@ Define load_strong as follows:
     %x = load %x_ptr : $*C
     retain_value %x : $C
 
-We also allow for a `[take]` flag to be applied to the `load_strong`:
+Then define `load_strong [take]` as:
 
     %x = load_strong [take] %x_ptr : $*Builtin.NativeObject
 
@@ -67,10 +68,11 @@ We also allow for a `[take]` flag to be applied to the `load_strong`:
 
     %x = load %x_ptr : $*Builtin.NativeObject
 
-`[take]` implies that the memory location no longer owns the loaded object (i.e.
-it is a move). Loading the memory location again without reinitialization is
-thus illegal. Enforcing that condition cannot be guaranteed with today's SIL, so
-we provide an additional alternative: `load_strong [guaranteed]`:
+**NOTE** `load_strong [take]` implies that the loaded from memory location no
+longer owns the result object (i.e. a take is a move). Loading from the memory
+location again without reinitialization is illegal.
+
+Finally we provide `load_strong [guaranteed]`:
 
     %x = load_strong [guaranteed] %x_ptr : $*Builtin.NativeObject
     ...
@@ -82,8 +84,12 @@ we provide an additional alternative: `load_strong [guaranteed]`:
     ...
     fixLifetime(%x)
 
-The `[guaranteed]` flag will express that the loaded object's lifetime can not
-be shortened before the `fixLifetime` instruction.
+`load_strong [guaranteed]` implies that in the region before the fixLifetime,
+the loaded object is guaranteed semantically to remain alive. The fixLifetime
+communicates to the optimizer the location up to which the value's lifetime is
+guaranteed to live. An example of where this construct is useful is when one has
+a let binding to a class instance `c` that contains a let field `f`. In that
+case `c`'s lifetime guarantees `f`'s lifetime.
 
 ## store_strong
 
@@ -112,32 +118,39 @@ no previous value in the memory location:
 
 ## Goals
 
-The goals which guide our bring up are:
+Our implementation strategy goals are:
 
 1. zero impact on other compiler developers until the feature is fully
    developed. This implies all work will be done behind a flag.
-2. separation of feature implementation from pass updates.
+2. separation of feature implementation from updating passes.
+
+Goal 2 will be implemented via a pass that blows up `load_strong`/`store_strong`
+right after SILGen.
 
 ## Plan
 
 We begin by adding initial infrastructure for our development. This means:
 
-1. A disabled by default flag called "EnableSILOwnershipModel" will be added to
-   SILOptions. A false by default option called "-enable-sil-ownership-mode"
-   will be added to the swift frontend. This will cause
-   "EnableSILOwnershipModel" flag to be set SILOptions.
+1. Adding to SILOptions a disabled by default flag called
+ "EnableSILOwnershipModel". This flag will be set by a false by default frontend
+ option called "-enable-sil-ownership-mode".
 
 2. Bots will be brought up to test the compiler with
-   "-enable-sil-ownership-model" set to true. Specifically, we will create a
-   separate RA-OSX+simulators, RA-Device, RA-Linux. Initially These will run
-   once a day but as the feature gets closer to completion will run in a polling
-   configuration.
+   "-enable-sil-ownership-model" set to true. The specific bots are:
+
+   * RA-OSX+simulators
+   * RA-Device
+   * RA-Linux.
+
+   The bots will run once a day until the feature is close to completion. Then a
+   polling model will be followed.
 
 Now that change isolation is guaranteed, we develop building blocks for the
 optimization:
 
-1. load_strong, store_strong will be implemented in SIL but will not be emitted
-by SILGen. IRGen/serialization/printing/parsing support will be implemented.
+1. load_strong, store_strong will be implemented in SIL and
+IRGen/serialization/printing/parsing support will be added. SILGen will not be
+modified at this stage.
 
 2. A small pass called the "OwnershipModelEliminator" will be
 implemented. Initially it will just to blow up load_strong/store_strong into
@@ -634,4 +647,3 @@ Thus we have achieved the desired result:
       %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
       apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
     }
-
