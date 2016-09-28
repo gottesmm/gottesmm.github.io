@@ -91,15 +91,27 @@ guaranteed to live. An example of where this construct is useful is when one has
 a let binding to a class instance `c` that contains a let field `f`. In that
 case `c`'s lifetime guarantees `f`'s lifetime.
 
-Finally we provide `load_strong [return]`. `load_strong [return]` is used to
-return a value without retaining it on the condition that the optimizer
-guarantees that:
+Finally we provide `load_strong [return]`:
+
+    %x = load_strong [return] %x_ptr : $*Builtin.NativeObject
+    return %x : $Builtin.NativeObject
+
+       =>
+
+    %x = load %x_ptr : $*Buitlin.NativeObject
+    return %x.
+
+`load_strong [return]` is used to return a value without retaining it on the
+condition that the optimizer guarantees that:
 
 1. The caller will immediately take ownership of the given object via a retain.
 2. The caller knows that the given value's lifetime is guaranteed over the
    region in the caller where the callee is invoked.
 3. The caller will pass off the given value without retaining it to a different
    function that consumes the given value.
+
+These rules will allow for the plus one to be moved into the caller and give the
+optimizer the flexibility to eliminate the retain if possible.
 
 ## store_strong
 
