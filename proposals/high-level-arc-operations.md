@@ -50,7 +50,7 @@ This will allow for:
 
 ## load_strong
 
-We propose three different forms of load_strong differentiated via flags. First
+We propose four different forms of load_strong differentiated via flags. First
 define `load_strong` as follows:
 
     %x = load_strong %x_ptr : $*C
@@ -72,7 +72,7 @@ Then define `load_strong [take]` as:
 longer owns the result object (i.e. a take is a move). Loading from the memory
 location again without reinitialization is illegal.
 
-Finally we provide `load_strong [guaranteed]`:
+Next we provide `load_strong [guaranteed]`:
 
     %x = load_strong [guaranteed] %x_ptr : $*Builtin.NativeObject
     ...
@@ -90,6 +90,16 @@ communicates to the optimizer the location up to which the value's lifetime is
 guaranteed to live. An example of where this construct is useful is when one has
 a let binding to a class instance `c` that contains a let field `f`. In that
 case `c`'s lifetime guarantees `f`'s lifetime.
+
+Finally we provide `load_strong [return]`. `load_strong [return]` is used to
+return a value without retaining it on the condition that the optimizer
+guarantees that:
+
+1. The caller will immediately take ownership of the given object via a retain.
+2. The caller knows that the given value's lifetime is guaranteed over the
+   region in the caller where the callee is invoked.
+3. The caller will pass off the given value without retaining it to a different
+   function that consumes the given value.
 
 ## store_strong
 
@@ -148,36 +158,33 @@ We begin by adding initial infrastructure for our development. This means:
 Now that change isolation is guaranteed, we develop building blocks for the
 optimization:
 
-1. load_strong, store_strong will be implemented in SIL and
-IRGen/serialization/printing/parsing support will be added. SILGen will not be
-modified at this stage.
+1. load_strong, store_strong will be added to SIL and IRGen, serialization,
+printing, SIL parsing support will be implemented. SILGen will not be modified
+at this stage.
 
-2. A small pass called the "OwnershipModelEliminator" will be
-implemented. Initially it will just to blow up load_strong/store_strong into
-their constituent operations. It will serve as a grab bag pass to eliminate
-parts of the SIL Ownership Model from the IR to ensure that we do not lose
-performance while bringing up this code.
+2. A pass called the "OwnershipModelEliminator" will be implemented. It will
+(initially) blow up load_strong/store_strong instructions into their constituent
+operations.
 
-3. The verifier will have a disabled by default option called
-"EnforceSILOwnershipModel" added to it. If the option is set, the verifier will
-verify that unsafe unowned loads, stores are not used to load from non-trivial
-memory locations. This flag will be used to trigger further verification at
-later stages of the implementation of the SIL Ownership model as well.
+3. An option called "EnforceSILOwnershipMode" will be added to the verifier. If
+the option is set, the verifier will assert if unsafe unowned loads, stores are
+used to load from non-trivial memory locations.
 
 Finally, we wire up the building blocks:
 
-1. The pass manager will be changed such that if the SILOption
-EnableSILOwnershipModel flag is set, the verifier that is run right after SILGen
-will have the EnforceSILOwnershipModel flag set. Then once ownership
-verification is complete, the OwnershipModelEliminator pass will be run and then
-the normal pipeline.
+1. If SILOption.EnableSILOwnershipModel is true, then the after SILGen SIL
+   verification will be performed with EnforceSILOwnershipModel set to true.
+2. If SILOption.EnableSILOwnershipModel is true, then the pass manager will run
+   the OwnershipModelEliminator pass right after SILGen before the normal pass
+   pipeline starts.
+3. SILGen will be changed to emit load_strong, store_strong instructions when
+   the EnableSILOwnershipModel flag is set. We will use the verifier throwing to
+   guarantee that we are not missing any specific cases.
 
-2. SILGen will be changed to emit load_strong, store_strong instructions when
-   the EnableSILOwnershipModel flag is set.
-
-Then we turn on the optimization by default once the compiler is able to pass
-the bots with the "-enable-sil-ownership-model" flag enabled. After a cooling
-down period, all of the aforementioned code will then be enabled by default.
+Then once all fo the bots are green, we change SILOption.EnableSILOwnershipModel
+to be true by default. After a cooling off period, we move all of the code
+behind the SILOwnershipModel flag in front of the flag. We do this so we can
+reuse that flag for further SILOwnershipModel changes.
 
 ## Optimizer Changes
 
@@ -229,23 +236,37 @@ same. Thus without any loss of generality, lets consider solely `store_strong`.
 
 ### ARC Code Motion
 
-The main implication for ARC Code Motion is that we can no longer move the ARC
-operations implied by load_strong, store_strong separately from said
-instructions. This means that when we want to move these instructions since
-there is now a load/store involved, we must also consider the read/writes to
-memory.
+If ARC Code Motion wishes to move `load_strong`, `store_strong` instructions, it
+must now consider read/write effects. On the other hand, it will be able to now
+not consider the side-effects of destructors when moving retain/release
+operations.
+
+### Normal Code Motion
+
+Normal code motion will lose some effectiveness since many of the load/store
+operations that it used to be able to move now must consider ARC information. We
+may need to consider running ARC code motion earlier in the pipeline where we
+normally run Normal Code Motion to ensure that we are able to handle these
+cases.
 
 ### ARC Optimization
 
 The main implication for ARC optimization is that instead of eliminating just
-retains, releases, it must be able to recognize load_strong/store_strong and set
-their flags as appropriate.
+retains, releases, it must be able to recognize `load_strong`, `store_strong`
+and set their flags as appropriate.
 
 ### Function Signature Optimization
 
-The main implication for FSO is that FSO must be able to recognize a `store strong`
-as releasing. Then it will change the `store_strong` to be a `store_store
-[init]` and move the release into the caller.
+Semantic ARC affects function signature optimization in the context of the owned
+to guaranteed optimization. Specifically:
+
+1. A `store_strong` must be recognized as a release of the old value that is
+   being overridden. In such a case, we can move the `release` of the old value
+   into the caller and change the `store_strong` into a `store_strong
+   [init]`.
+2. A `load_strong` must be recognized as a retain in the callee. Then function
+   signature optimization will transform the `load_strong` into a `load_strong
+   [return]`.
 
 # Appendix
 
