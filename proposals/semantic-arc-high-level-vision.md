@@ -20,9 +20,10 @@ preserve crucial information, allowing us to:
 1. Quickly determine the source of any ARC errors from the optimizer and SILGen.
 2. Implement a new, simpler ARC optimizer that will be faster and more
    maintainable.
-3. Eliminate retain/release traffic more aggressively.
+3. Eliminate retain/release traffic more aggressively using semantic pairing
+   information.
 4. Lay the groundwork for the representation of other forms of ownership, such
-as move semantics, in SIL.
+   as move semantics, in SIL.
 
 # The Engineering Plan
 
