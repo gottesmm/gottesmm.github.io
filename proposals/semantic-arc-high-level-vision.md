@@ -6,45 +6,36 @@ categories: proposals
 
 # Preface
 
-For Swift 4, we plan to introduce “Semantic ARC,” a major overhaul of ownership
+For Swift 4, we plan to introduce "Semantic ARC", a major overhaul of ownership
 in SIL. This document outlines the problems solved by "Semantic ARC", how it
 works, and an engineering plan for implementing it.
 
 # The Problem and the Goal
 
-A problem in SIL today is that SIL as an IR is defined at too low of level for
-the definition of a statically verifiable SIL ownership model.  The lack of such
-a model precludes the ability to aggressivly optimize ARC or write a fast
-SIL ownership verifier.
+As defined today, SIL represents retain/release operations as independent
+operations, without surfacing the relationships that would the most aggressive
+optimizations and fast static verification. Semantic ARC enhances SIL to
+preserve crucial information, allowing us to:
 
-Semantic ARC solves this general problem by making changes to SIL that allow for
-such a model to be defined and creating verifiers that will enable the ownership
-model to be statically verified at compile time. This will result in:
-
-1. The ability to quickly triage and determine the source of ARC errors from the
-   optimizer and SILGen.
-2. A drastic simplification of the ARC optimization problem allowing for the ARC
-   optimizer to be more maintainable, simpler, and use less compile time.
-3. More aggressive ARC optimization using additional semantic information such
-   as "semantic pairings".
-4. Creating the necessary information for other forms of ownership to be added
-   to the SIL IR such as move semantics.
+1. Quickly determine the source of any ARC errors from the optimizer and SILGen.
+2. Implement a new, simpler ARC optimizer that will be faster and more
+   maintainable.
+3. Eliminate retain/release traffic more aggressively.
+4. Lay the groundwork for the representation of other forms of ownership, such
+as move semantics, in SIL.
 
 # The Engineering Plan
 
-The engineering plan for this involves implementing several transformations on
-the IR that can occur inter-dependently. Each of these steps will have a
-mini-proposal (the first of which will be sent out shortly) that describes each
-specific step in more detail. The specified steps are:
+The engineering plan involves the following steps:
 
-1. Replace Low Level dataflow ARC Operations with High Level SSA ARC operations.
-2. Add Ownership Conventions to block arguments and terminators.
-3. Implement a simple algorithm based on use-def traversal for determining
-   consumers/producers for any SSA value and use this to verify that
-   consumers/producers of SSA values have matching semantics.
-4. Implement an algorithm that verifies that for any specific producer/consumer,
-   along any path through the program, a producer/consumer is only matched with
-   one other consumer/producer.
-5. Represent Address Only Types via SSA values instead of Memory Locations to
-   enable Address Only Types to participate in this system.
+1. Replace Low Level Dataflow ARC Operations with High Level SSA ARC operations.
+2. Add ownership conventions to block arguments and terminators.
+3. Implement a verifier that ensures all paired ownership operations have
+   compatible conventions.
+4. Implement an algorithm that verifies that all ownership operations are paired
+   exactly once along paths through the program.
+5. Represent Address Only Types using SSA values instead of Memory Locations.
 
+Each of these steps will be described in detail by focused mini-proposals. The
+first such proposal (High Level ARC Memory Operations) has been sent out in a
+separate thread for discussion.
