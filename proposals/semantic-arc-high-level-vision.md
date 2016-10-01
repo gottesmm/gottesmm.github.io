@@ -37,6 +37,5 @@ The engineering plan involves the following steps:
    exactly once along paths through the program.
 5. Represent Address Only Types using SSA values instead of Memory Locations.
 
-Each of these steps will be described in detail by focused mini-proposals. The
-first such proposal (High Level ARC Memory Operations) has been sent out in a
-separate thread for discussion.
+Each of these steps will be described in detail by focused mini-proposals sent
+to swift-dev.
