@@ -1,6 +1,6 @@
 ---
 layout: proposal
-title: High Level ARC Operations
+title: High Level ARC Memory Operations
 categories: proposals
 ---
 
@@ -50,7 +50,7 @@ This will allow for:
 
 ## load_strong
 
-We propose four different forms of load_strong differentiated via flags. First
+We propose three different forms of load_strong differentiated via flags. First
 define `load_strong` as follows:
 
     %x = load_strong %x_ptr : $*C
@@ -91,28 +91,6 @@ guaranteed to live. An example of where this construct is useful is when one has
 a let binding to a class instance `c` that contains a let field `f`. In that
 case `c`'s lifetime guarantees `f`'s lifetime.
 
-Finally we provide `load_strong [return]`:
-
-    %x = load_strong [return] %x_ptr : $*Builtin.NativeObject
-    return %x : $Builtin.NativeObject
-
-       =>
-
-    %x = load %x_ptr : $*Buitlin.NativeObject
-    return %x.
-
-`load_strong [return]` is used to return a value without retaining it on the
-condition that the optimizer guarantees that:
-
-1. The caller will immediately take ownership of the given object via a retain.
-2. The caller knows that the given value's lifetime is guaranteed over the
-   region in the caller where the callee is invoked.
-3. The caller will pass off the given value without retaining it to a different
-   function that consumes the given value.
-
-These rules will allow for the plus one to be moved into the caller and give the
-optimizer the flexibility to eliminate the retain if possible.
-
 ## store_strong
 
 Define a store_strong as follows:
@@ -122,18 +100,17 @@ Define a store_strong as follows:
        =>
 
     %old_x = load %x_ptr : $*C
-    retain_value %new_x : $C
     store %new_x to %x_ptr : $*C
     release_value %old_x : $C
 
-We also provide an init flag in the case where we know statically that there is
-no previous value in the memory location:
+*NOTE* store_strong is defined as a consuming operation. We also provide
+`store_strong [init]` in the case where we know statically that there is no
+previous value in the memory location:
 
     store_strong %x to [init] %x_ptr : $*C
 
        =>
 
-    retain_value %new_x : $C
     store %new_x to %x_ptr : $*C
 
 # Implementation
@@ -278,7 +255,8 @@ to guaranteed optimization. Specifically:
    [init]`.
 2. A `load_strong` must be recognized as a retain in the callee. Then function
    signature optimization will transform the `load_strong` into a `load_strong
-   [return]`.
+   [guaranteed]`. This would require the addition of a new `@guaranteed` return
+   value convention.
 
 # Appendix
 
