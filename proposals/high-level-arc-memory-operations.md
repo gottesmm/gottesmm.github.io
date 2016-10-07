@@ -11,21 +11,22 @@ categories: proposals
 
 - [Summary](#summary)
 - [Definitions](#definitions)
-    - [load_strong](#loadstrong)
-    - [store_strong](#storestrong)
+    - [ownership qualified load](#ownership-qualified-load)
+    - [ownership qualified store](#ownership-qualified-store)
 - [Implementation](#implementation)
     - [Goals](#goals)
     - [Plan](#plan)
     - [Optimizer Changes](#optimizer-changes)
         - [store->load forwarding](#store-load-forwarding)
         - [ARC Code Motion](#arc-code-motion)
+        - [Normal Code Motion](#normal-code-motion)
         - [ARC Optimization](#arc-optimization)
         - [Function Signature Optimization](#function-signature-optimization)
 - [Appendix](#appendix)
     - [Partial Initialization of Loadable References in SIL](#partial-initialization-of-loadable-references-in-sil)
-    - [Case Study: Partial Initialization and load_strong](#case-study-partial-initialization-and-loadstrong)
+    - [Case Study: Partial Initialization and load [[copy]]](#case-study-partial-initialization-and-load-copy)
         - [The Problem](#the-problem)
-        - [Defining load_strong](#defining-loadstrong)
+        - [Defining load [[copy]]](#defining-load-copy)
 
 <!-- markdown-toc end -->
 
@@ -33,48 +34,61 @@ categories: proposals
 
 This document proposes:
 
-1. adding the `load_strong`, `store_strong` instructions to SIL. These can only
-   be used with memory locations of `non-trivial` type.
-2. banning the use of `load`, `store` on values of `non-trivial` type.
+1. adding the following ownership qualifiers to `load`: `[take]`, `[copy]`,
+   `[guaranteed]`, `[trivial]`.
+2. adding the following ownership qualifiers to `store`: `[init]`, `[assign]`,
+   `[trivial]`.
+3. requiring all `load` and `store` operations to have ownership qualifiers.
+4. banning the use of `load [trivial]`, `store [trivial]` on memory locations of
+   `non-trivial` type.
 
 This will allow for:
 
 1. eliminating optimizer miscompiles that occur due to releases being moved into
    the region in between a `load`/`retain`, `load`/`release`,
    `store`/`release`. (For a specific example, see the appendix).
-2. modeling `load`/`store` as having `unsafe unowned` ownership semantics. This
-   will be enforced via the verifier.
+2. explicitly modeling `load [trivial]`/`store [trivial]` as having `unsafe
+   unowned` ownership semantics. This will be enforced via the verifier.
 3. more aggressive ARC code motion.
 
 # Definitions
 
-## load_strong
+## ownership qualified load
 
-We propose three different forms of load_strong differentiated via flags. First
-define `load_strong` as follows:
+We propose four different ownership qualifiers for load. Define `load [trivial]`
+as:
 
-    %x = load_strong %x_ptr : $*C
+    %x = load [trivial] %x_ptr : $*Int
+
+      =>
+
+    %x = load %x_ptr : $*Int
+
+A `load [trivial]` can not be used to load values of non-trivial type. Define
+`load [copy]` as:
+
+    %x = load [copy] %x_ptr : $*C
 
       =>
 
     %x = load %x_ptr : $*C
     retain_value %x : $C
 
-Then define `load_strong [take]` as:
+Then define `load [take]` as:
 
-    %x = load_strong [take] %x_ptr : $*Builtin.NativeObject
+    %x = load [take] %x_ptr : $*Builtin.NativeObject
 
       =>
 
     %x = load %x_ptr : $*Builtin.NativeObject
 
-**NOTE** `load_strong [take]` implies that the loaded from memory location no
-longer owns the result object (i.e. a take is a move). Loading from the memory
-location again without reinitialization is illegal.
+**NOTE** `load [take]` implies that the loaded from memory location no longer
+owns the result object (i.e. a take is a move). Loading from the memory location
+again without reinitialization is illegal.
 
-Next we provide `load_strong [guaranteed]`:
+Next we provide `load [guaranteed]`:
 
-    %x = load_strong [guaranteed] %x_ptr : $*Builtin.NativeObject
+    %x = load [guaranteed] %x_ptr : $*Builtin.NativeObject
     ...
     fixLifetime(%x)
 
@@ -84,18 +98,27 @@ Next we provide `load_strong [guaranteed]`:
     ...
     fixLifetime(%x)
 
-`load_strong [guaranteed]` implies that in the region before the fixLifetime,
+`load [guaranteed]` implies that in the region before the fixLifetime,
 the loaded object is guaranteed semantically to remain alive. The fixLifetime
 communicates to the optimizer the location up to which the value's lifetime is
 guaranteed to live. An example of where this construct is useful is when one has
 a let binding to a class instance `c` that contains a let field `f`. In that
 case `c`'s lifetime guarantees `f`'s lifetime.
 
-## store_strong
+## ownership qualified store
 
-Define a store_strong as follows:
+First define a `store [trivial]` as:
 
-    store_strong %x to %x_ptr : $*C
+    store %x to [trivial] %x_ptr : $*Int
+
+      =>
+
+    store %x to %x_ptr : $*Int
+
+The verifier will prevent this instruction from being used on types with
+non-trivial ownership. Define a `store [assign]` as follows:
+
+    store %x to [assign] %x_ptr : $*C
 
        =>
 
@@ -103,11 +126,11 @@ Define a store_strong as follows:
     store %new_x to %x_ptr : $*C
     release_value %old_x : $C
 
-*NOTE* store_strong is defined as a consuming operation. We also provide
-`store_strong [init]` in the case where we know statically that there is no
+*NOTE* `store` is defined as a consuming operation. We also provide
+`store [init]` in the case where we know statically that there is no
 previous value in the memory location:
 
-    store_strong %x to [init] %x_ptr : $*C
+    store %x to [init] %x_ptr : $*C
 
        =>
 
@@ -123,8 +146,8 @@ Our implementation strategy goals are:
    developed. This implies all work will be done behind a flag.
 2. separation of feature implementation from updating passes.
 
-Goal 2 will be implemented via a pass that blows up `load_strong`/`store_strong`
-right after SILGen.
+Goal 2 will be implemented via a pass that transforms ownership qualified
+`load`/`store` instructions into unqualified `load`/`store` right after SILGen.
 
 ## Plan
 
@@ -147,17 +170,43 @@ We begin by adding initial infrastructure for our development. This means:
 Now that change isolation is guaranteed, we develop building blocks for the
 optimization:
 
-1. load_strong, store_strong will be added to SIL and IRGen, serialization,
-printing, SIL parsing support will be implemented. SILGen will not be modified
-at this stage.
+1. Two enums will be defined: `LoadInstOwnershipQualifier`,
+   `StoreInstOwnershipQualifier`. The exact definition of these enums are as
+   follows:
 
-2. A pass called the "OwnershipModelEliminator" will be implemented. It will
-(initially) blow up load_strong/store_strong instructions into their constituent
-operations.
+       enum class LoadOwnershipQualifier {
+         Unqualified, Take, Copy, Guaranteed, Trivial
+       };
+       enum class StoreOwnershipQualifier {
+         Unqualified, Init, Assign, Trivial
+       };
+
+    *NOTE* `LoadOwnershipQualifier::Unqualified` and
+    `StoreOwnershipQualifier::Unqualified` are only needed for staging purposes.
+
+2. Creating a `LoadInst`, `StoreInst` will be changed to require an ownership
+qualifier. At this stage, this argument will default to `Unqualified`. "Bare"
+`load`, `store` when parsed via textual SIL will be considered to be
+unqualified. This implies that the rest of the compiler will not have to be
+changed as a result of this step.
+
+3. Support will be added to SIL, IRGen, Serialization, SILPrinting, and SIL
+Parsing for the rest of the qualifiers. SILGen will not be modified at this
+stage.
+
+4. A pass called the "OwnershipModelEliminator" will be implemented. It will
+   blow up all `load`, `store` instructions with non `*::Unqualified` ownership
+   into their constituant ARC operations and `*::Unqualified` `load`, `store`
+   insts.
 
 3. An option called "EnforceSILOwnershipMode" will be added to the verifier. If
-the option is set, the verifier will assert if unsafe unowned loads, stores are
-used to load from non-trivial memory locations.
+the option is set, the verifier will assert if:
+
+   a. `load`, `store` operations with trivial ownership are applied to memory
+      locations with non-trivial type.
+
+   b. `load`, `store` operation with unqualified ownership type are present in
+   the IR.
 
 Finally, we wire up the building blocks:
 
@@ -166,30 +215,31 @@ Finally, we wire up the building blocks:
 2. If SILOption.EnableSILOwnershipModel is true, then the pass manager will run
    the OwnershipModelEliminator pass right after SILGen before the normal pass
    pipeline starts.
-3. SILGen will be changed to emit load_strong, store_strong instructions when
-   the EnableSILOwnershipModel flag is set. We will use the verifier throwing to
-   guarantee that we are not missing any specific cases.
+3. SILGen will be changed to emit non-unqualified ownership qualifiers on load,
+   store instructions when the EnableSILOwnershipModel flag is set. We will use
+   the verifier throwing to guarantee that we are not missing any specific
+   cases.
 
-Then once all fo the bots are green, we change SILOption.EnableSILOwnershipModel
+Then once all of the bots are green, we change SILOption.EnableSILOwnershipModel
 to be true by default. After a cooling off period, we move all of the code
 behind the SILOwnershipModel flag in front of the flag. We do this so we can
 reuse that flag for further SILOwnershipModel changes.
 
 ## Optimizer Changes
 
-Since the SILOwnershipModel eliminator will eliminate the load_strong,
-store_strong instructions right after ownership verification, there will be no
+Since the SILOwnershipModel eliminator will eliminate the ownership qualifiers
+on load, store instructions right after ownership verification, there will be no
 immediate affects on the optimizer and thus the optimizer changes can be done in
 parallel with the rest of the ARC optimization work.
 
-But, in the long run, we need IRGen to eliminate the load_strong, store_strong
-instructions, not the SILOwnershipModel eliminator, so that we can enforce
-Ownership invariants all through the SIL pipeline. Thus we will need to update
-passes to handle these new instructions. The main optimizer changes can be
-separated into the following areas: memory forwarding, dead stores, ARC
-optimization. In all of these cases, the necessary changes are relatively
-trivial to respond to. We give a quick taste of two of them: store->load
-forwarding and ARC Code Motion.
+But, in the long run, we want to enforce these ownership invariants all
+throughout the SIL pipeline implying these ownership qualified `load`, `store`
+instructions must be processed by IRGen, not eliminated by the SILOwnershipModel
+eliminator. Thus we will need to update passes to handle these new
+instructions. The main optimizer changes can be separated into the following
+areas: memory forwarding, dead stores, ARC optimization. In all of these cases,
+the necessary changes are relatively trivial to respond to. We give a quick
+taste of two of them: store->load forwarding and ARC Code Motion.
 
 ### store->load forwarding
 
@@ -206,29 +256,29 @@ Currently we perform store->load forwarding as follows:
     ... NO SIDE EFFECTS THAT TOUCH X_PTR ...
     use(%x)
 
-In a world, where we are using load_strong, store_strong, we have to also
+In a world, where we are using ownership qualified load, store, we have to also
 consider the ownership implications. *NOTE* Since we are not modifying the
-store_strong, `store_strong` and `store_strong [init]` are treated the
-same. Thus without any loss of generality, lets consider solely `store_strong`.
+store, `store [assign]` and `store [init]` are treated the same. Thus without
+any loss of generality, lets consider solely `store`.
 
-    store_strong %x to %x_ptr : $C
+    store %x to [assign] %x_ptr : $C
     ... NO SIDE EFFECTS THAT TOUCH X_PTR ...
-    %y = load_strong %x_ptr : $C
+    %y = load [copy] %x_ptr : $C
     use(%y)
 
       =>
 
-    store_strong %x to %x_ptr : $C
+    store %x to [assign] %x_ptr : $C
     ... NO SIDE EFFECTS THAT TOUCH X_PTR ...
     strong_retain %x
     use(%x)
 
 ### ARC Code Motion
 
-If ARC Code Motion wishes to move `load_strong`, `store_strong` instructions, it
-must now consider read/write effects. On the other hand, it will be able to now
-not consider the side-effects of destructors when moving retain/release
-operations.
+If ARC Code Motion wishes to move the ARC semantics of ownership qualified
+`load`, `store` instructions, it must now consider read/write effects. On the
+other hand, it will be able to now not consider the side-effects of destructors
+when moving retain/release operations.
 
 ### Normal Code Motion
 
@@ -241,20 +291,19 @@ cases.
 ### ARC Optimization
 
 The main implication for ARC optimization is that instead of eliminating just
-retains, releases, it must be able to recognize `load_strong`, `store_strong`
-and set their flags as appropriate.
+retains, releases, it must be able to recognize ownership qualified `load`,
+`store` and set their flags as appropriate.
 
 ### Function Signature Optimization
 
 Semantic ARC affects function signature optimization in the context of the owned
 to guaranteed optimization. Specifically:
 
-1. A `store_strong` must be recognized as a release of the old value that is
+1. A `store [assign]` must be recognized as a release of the old value that is
    being overridden. In such a case, we can move the `release` of the old value
-   into the caller and change the `store_strong` into a `store_strong
-   [init]`.
-2. A `load_strong` must be recognized as a retain in the callee. Then function
-   signature optimization will transform the `load_strong` into a `load_strong
+   into the caller and change the `store [assign]` into a `store [init]`.
+2. A `load [copy]` must be recognized as a retain in the callee. Then function
+   signature optimization will transform the `load [copy]` into a `load
    [guaranteed]`. This would require the addition of a new `@guaranteed` return
    value convention.
 
@@ -279,13 +328,13 @@ store of a non-trival value into a memory location.
 Since this sort of partial initialization is allowed in SIL, the optimizer is
 forced to be overly conservative when attempting to move releases passed retains
 lest the release triggers a deinit that destroys a value like `%x`. Lets look at
-two concrete examples that show how semantically providing load_strong,
-store_strong instructions eliminate this problem.
+two concrete examples that show how semantically providing ownership qualified
+load, store instructions eliminate this problem.
 
 **NOTE** Without any loss of generality, we will speak of values with reference
 semantics instead of non-trivial values.
 
-## Case Study: Partial Initialization and load_strong
+## Case Study: Partial Initialization and load [copy]
 
 ### The Problem
 
@@ -550,13 +599,13 @@ performed even after code motion causes our SIL to look as follows:
 
 Giving us the exact result that we want: Operation Sequence 2!
 
-### Defining load_strong
+### Defining load [copy]
 
 Given that we wish the load, store to be tightly coupled together, it is natural
-to express this operation as a `load_strong` instruction. Lets define the
-`load_strong` instruction as follows:
+to express this operation as a `load [copy]` instruction. Lets define the `load
+[copy]` instruction as follows:
 
-    %1 = load_strong %0 : $*C
+    %1 = load [copy] %0 : $*C
 
       =>
 
@@ -579,8 +628,8 @@ Notice how now if we move `(7)` over `(3)` and `(6)` now, we get the following S
       strong_retain %d : $D
       store %d to %global_d : $*D                                              (2)
 
-      %c2 = load_strong %global_c : $*C                                        (3)
-      %d2 = load_strong %global_d : $*D                                        (5)
+      %c2 = load [copy] %global_c : $*C                                        (3)
+      %d2 = load [copy] %global_d : $*D                                        (5)
 
       %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
       apply %useC_func(%c2) : $@convention(thin) (@owned C) -> ()              (7)
@@ -606,12 +655,12 @@ We then perform the previous code motion:
       strong_retain %d : $D
       store %d to %global_d : $*D                                              (2)
 
-      %c2 = load_strong %global_c : $*C                                        (3)
+      %c2 = load [copy] %global_c : $*C                                        (3)
       %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
       apply %useC_func(%c2) : $@convention(thin) (@owned C) -> ()              (7)
       strong_release %d : $D                                                   (9)
 
-      %d2 = load_strong %global_d : $*D                                        (5)
+      %d2 = load [copy] %global_d : $*D                                        (5)
       %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
       apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
       strong_release %c : $C                                                   (10)
@@ -619,22 +668,22 @@ We then perform the previous code motion:
 
 We then would like to eliminate `(9)` and `(10)` by pairing them with `(3)` and
 `(8)`. Can we still do so? One way we could do this is by introducing the
-`[take]` flag. The `[take]` flag on a load_strong says that one is semantically
-loading a value from a memory location and are taking ownership of the value
-thus eliding the retain. In terms of SIL this flag is defined as:
+`[take]` flag. The `[take]` flag on a `load [take]` says that one is
+semantically loading a value from a memory location and are taking ownership of
+the value thus eliding the retain. In terms of SIL this flag is defined as:
 
-    %x = load_strong [take] %x_ptr : $*C
+    %x = load [take] %x_ptr : $*C
 
       =>
 
     %x = load %x_ptr : $*C
 
-Why do we care about having such a `load_strong [take]` instruction when we
-could just use a `load`? The reason why is that a normal `load` has unsafe
-unowned ownership (i.e. it has no implications on ownership). We would like for
-memory that has non-trivial type to only be able to be loaded via instructions
-that maintain said ownership. We will allow for casting to trivial types as
-usual to provide such access if it is required.
+Why do we care about having such a `load [take]` instruction when we could just
+use a `load`? The reason why is that a normal `load` has unsafe unowned
+ownership (i.e. it has no implications on ownership). We would like for memory
+that has non-trivial type to only be able to be loaded via instructions that
+maintain said ownership. We will allow for casting to trivial types as usual to
+provide such access if it is required.
 
 Thus we have achieved the desired result:
 
@@ -650,11 +699,11 @@ Thus we have achieved the desired result:
       strong_retain %d : $D
       store %d to %global_d : $*D                                              (2)
 
-      %c2 = load_strong [take] %global_c : $*C                                 (3)
+      %c2 = load [take] %global_c : $*C                                        (3)
       %useC_func = function_ref @useC : $@convention(thin) (@owned C) -> ()
       apply %useC_func(%c2) : $@convention(thin) (@owned C) -> ()              (7)
 
-      %d2 = load_strong [take] %global_d : $*D                                 (5)
+      %d2 = load [take] %global_d : $*D                                        (5)
       %useD_func = function_ref @useD : $@convention(thin) (@owned D) -> ()
       apply %useD_func(%d2) : $@convention(thin) (@owned D) -> ()              (8)
     }
