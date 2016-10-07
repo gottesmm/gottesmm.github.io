@@ -24,9 +24,9 @@ categories: proposals
         - [Function Signature Optimization](#function-signature-optimization)
 - [Appendix](#appendix)
     - [Partial Initialization of Loadable References in SIL](#partial-initialization-of-loadable-references-in-sil)
-    - [Case Study: Partial Initialization and load [[copy]]](#case-study-partial-initialization-and-load-copy)
+    - [Case Study: Partial Initialization and load [copy]](#case-study-partial-initialization-and-load-copy)
         - [The Problem](#the-problem)
-        - [Defining load [[copy]]](#defining-load-copy)
+        - [Defining load [copy]](#defining-load-copy)
 
 <!-- markdown-toc end -->
 
@@ -35,7 +35,7 @@ categories: proposals
 This document proposes:
 
 1. adding the following ownership qualifiers to `load`: `[take]`, `[copy]`,
-   `[guaranteed]`, `[trivial]`.
+   `[borrow]`, `[trivial]`.
 2. adding the following ownership qualifiers to `store`: `[init]`, `[assign]`,
    `[trivial]`.
 3. requiring all `load` and `store` operations to have ownership qualifiers.
@@ -86,24 +86,31 @@ Then define `load [take]` as:
 owns the result object (i.e. a take is a move). Loading from the memory location
 again without reinitialization is illegal.
 
-Next we provide `load [guaranteed]`:
+Next we provide `load [borrow]`:
 
-    %x = load [guaranteed] %x_ptr : $*Builtin.NativeObject
+    %x = load [borrow] %x_ptr : $*Builtin.NativeObject
     ...
-    fixLifetime(%x)
+    endBorrow(%x, %x_ptr)
 
       =>
 
     %x = load %x_ptr : $*Builtin.NativeObject
     ...
-    fixLifetime(%x)
+    endBorrow(%x, %x_ptr)
 
-`load [guaranteed]` implies that in the region before the fixLifetime,
-the loaded object is guaranteed semantically to remain alive. The fixLifetime
-communicates to the optimizer the location up to which the value's lifetime is
-guaranteed to live. An example of where this construct is useful is when one has
-a let binding to a class instance `c` that contains a let field `f`. In that
-case `c`'s lifetime guarantees `f`'s lifetime.
+`load [borrow]` implies that in the region between the `load` and the
+`endBorrow`, the loaded object must semantically remain alive. The `endBorrow`
+communicates to the optimizer:
+
+1. That the value in `%x_ptr` should not be destroyed before endBorrow.
+2. Uses of `%x` should not be sunk past endBorrow since `%x` is only a shallow
+   copy of the value in `%x_ptr` and past that point `%x_ptr` may not remain
+   alive.
+
+An example of where this construct is useful is when one has a let binding to a
+class instance `c` that contains a let field `f`. In that case `c`'s lifetime
+guarantees `f`'s lifetime meaning that returning `f` over the function call
+boundary is safe.
 
 ## ownership qualified store
 
@@ -167,7 +174,7 @@ We begin by adding initial infrastructure for our development. This means:
    The bots will run once a day until the feature is close to completion. Then a
    polling model will be followed.
 
-Now that change isolation is guaranteed, we develop building blocks for the
+Now that change isolation is borrow, we develop building blocks for the
 optimization:
 
 1. Two enums will be defined: `LoadInstOwnershipQualifier`,
@@ -175,7 +182,7 @@ optimization:
    follows:
 
        enum class LoadOwnershipQualifier {
-         Unqualified, Take, Copy, Guaranteed, Trivial
+         Unqualified, Take, Copy, Borrow, Trivial
        };
        enum class StoreOwnershipQualifier {
          Unqualified, Init, Assign, Trivial
@@ -297,14 +304,14 @@ retains, releases, it must be able to recognize ownership qualified `load`,
 ### Function Signature Optimization
 
 Semantic ARC affects function signature optimization in the context of the owned
-to guaranteed optimization. Specifically:
+to borrow optimization. Specifically:
 
 1. A `store [assign]` must be recognized as a release of the old value that is
    being overridden. In such a case, we can move the `release` of the old value
    into the caller and change the `store [assign]` into a `store [init]`.
 2. A `load [copy]` must be recognized as a retain in the callee. Then function
    signature optimization will transform the `load [copy]` into a `load
-   [guaranteed]`. This would require the addition of a new `@guaranteed` return
+   [borrow]`. This would require the addition of a new `@borrow` return
    value convention.
 
 # Appendix
