@@ -12,6 +12,7 @@ categories: proposals
 - [Summary](#summary)
 - [Definitions](#definitions)
     - [ownership qualified load](#ownership-qualified-load)
+    - [load_borrow and borrow_end](#loadborrow-and-borrowend)
     - [ownership qualified store](#ownership-qualified-store)
 - [Implementation](#implementation)
     - [Goals](#goals)
@@ -35,9 +36,10 @@ categories: proposals
 This document proposes:
 
 1. adding the following ownership qualifiers to `load`: `[take]`, `[copy]`,
-   `[borrow]`, `[trivial]`.
+   `[trivial]`.
 2. adding the following ownership qualifiers to `store`: `[init]`, `[assign]`,
    `[trivial]`.
+3. adding the `load_borrow` instruction and the `borrow_end` instruction.
 3. requiring all `load` and `store` operations to have ownership qualifiers.
 4. banning the use of `load [trivial]`, `store [trivial]` on memory locations of
    `non-trivial` type.
@@ -55,7 +57,7 @@ This will allow for:
 
 ## ownership qualified load
 
-We propose four different ownership qualifiers for load. Define `load [trivial]`
+We propose three different ownership qualifiers for load. Define `load [trivial]`
 as:
 
     %x = load [trivial] %x_ptr : $*Int
@@ -86,20 +88,23 @@ Then define `load [take]` as:
 owns the result object (i.e. a take is a move). Loading from the memory location
 again without reinitialization is illegal.
 
-Next we provide `load [borrow]`:
+## load_borrow and borrow_end
 
-    %x = load [borrow] %x_ptr : $*Builtin.NativeObject
+Next we provide `load_borrow` and `borrow_end`:
+
+    %x = load_borrow %x_ptr : $*Builtin.NativeObject
     ...
-    endBorrow(%x, %x_ptr)
+    borrow_end %x, %x_ptr : $*Builtin.NativeObject
 
       =>
 
     %x = load %x_ptr : $*Builtin.NativeObject
     ...
-    endBorrow(%x, %x_ptr)
+    endLifetime %x : $Builtin.NativeObject
+    fixLifetime %x_ptr : $*Builtin.NativeObject
 
 `load [borrow]` implies that in the region between the `load` and the
-`endBorrow`, the loaded object must semantically remain alive. The `endBorrow`
+`borrow_end`, the loaded object must semantically remain alive. The `borrow_end`
 communicates to the optimizer:
 
 1. That the value in `%x_ptr` should not be destroyed before endBorrow.
@@ -111,6 +116,13 @@ An example of where this construct is useful is when one has a let binding to a
 class instance `c` that contains a let field `f`. In that case `c`'s lifetime
 guarantees `f`'s lifetime meaning that returning `f` over the function call
 boundary is safe.
+
+*NOTE* since the SILOwnershipModelEliminator will not process these
+instructions, endLifetime is just a strawman instruction that will not be
+implemented. In practice though, IRGen will need to create a suitable barrier to
+ensure that LLVM does not move any uses of %x past the fixLifetime instruction
+of `%x_ptr` once we begin creating such instructions as a result of ARC
+optimization.
 
 ## ownership qualified store
 
@@ -182,7 +194,7 @@ optimization:
    follows:
 
        enum class LoadOwnershipQualifier {
-         Unqualified, Take, Copy, Borrow, Trivial
+         Unqualified, Take, Copy, Trivial
        };
        enum class StoreOwnershipQualifier {
          Unqualified, Init, Assign, Trivial
@@ -197,14 +209,19 @@ qualifier. At this stage, this argument will default to `Unqualified`. "Bare"
 unqualified. This implies that the rest of the compiler will not have to be
 changed as a result of this step.
 
-3. Support will be added to SIL, IRGen, Serialization, SILPrinting, and SIL
+3. Support will be added to SIL, IRGen, Serialization, SIL Printing, and SIL
 Parsing for the rest of the qualifiers. SILGen will not be modified at this
 stage.
 
-4. A pass called the "OwnershipModelEliminator" will be implemented. It will
+4. The `load_borrow` and `borrow_end` instructions will be created. These will
+   only have SIL, IRGen, Serialization, SIL Printing, and SIL Parsing support
+   added.
+
+5. A pass called the "OwnershipModelEliminator" will be implemented. It will
    blow up all `load`, `store` instructions with non `*::Unqualified` ownership
    into their constituant ARC operations and `*::Unqualified` `load`, `store`
-   insts.
+   insts. It will not process `load_borrow` and `borrow_end` since currently it
+   is not expected for SILGen to emit such instructions.
 
 3. An option called "EnforceSILOwnershipMode" will be added to the verifier. If
 the option is set, the verifier will assert if:
@@ -214,6 +231,11 @@ the option is set, the verifier will assert if:
 
    b. `load`, `store` operation with unqualified ownership type are present in
    the IR.
+
+   c. `load_borrow` or `borrow_end` are present in the IR. This is because
+   currently we do not support SIL containing such instructions in SIL
+   Ownership Mode. Once we have the ability to verify borrowing scopes, this
+   will no longer be the case, but this is a different proposal.
 
 Finally, we wire up the building blocks:
 
@@ -299,7 +321,9 @@ cases.
 
 The main implication for ARC optimization is that instead of eliminating just
 retains, releases, it must be able to recognize ownership qualified `load`,
-`store` and set their flags as appropriate.
+`store` and set their flags as appropriate. Also in general ARC optimization and
+memory behavior will need to recognize the borrow_end instruction as a code
+motion barrier.
 
 ### Function Signature Optimization
 
@@ -310,8 +334,8 @@ to borrow optimization. Specifically:
    being overridden. In such a case, we can move the `release` of the old value
    into the caller and change the `store [assign]` into a `store [init]`.
 2. A `load [copy]` must be recognized as a retain in the callee. Then function
-   signature optimization will transform the `load [copy]` into a `load
-   [borrow]`. This would require the addition of a new `@borrow` return
+   signature optimization will transform the `load [copy]` into a
+   `load_borrow`. This would require the addition of a new `@borrow` return
    value convention.
 
 # Appendix
