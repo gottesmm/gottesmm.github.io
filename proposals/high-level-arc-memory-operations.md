@@ -107,8 +107,8 @@ Next we provide `load_borrow` and `end_borrow`:
 `end_borrow`, the loaded object must semantically remain alive. The `end_borrow`
 communicates to the optimizer:
 
-1. That the value in `%x_ptr` should not be destroyed before endBorrow.
-2. Uses of `%x` should not be sunk past endBorrow since `%x` is only a shallow
+1. that the value in `%x_ptr` should not be destroyed before endBorrow.
+2. uses of `%x` should not be sunk past endBorrow since `%x` is only a shallow
    copy of the value in `%x_ptr` and past that point `%x_ptr` may not remain
    alive.
 
@@ -213,10 +213,6 @@ changed as a result of this step.
 Parsing for the rest of the qualifiers. SILGen will not be modified at this
 stage.
 
-4. The `load_borrow` and `end_borrow` instructions will be created. These will
-   only have SIL, IRGen, Serialization, SIL Printing, and SIL Parsing support
-   added.
-
 5. A pass called the "OwnershipModelEliminator" will be implemented. It will
    blow up all `load`, `store` instructions with non `*::Unqualified` ownership
    into their constituant ARC operations and `*::Unqualified` `load`, `store`
@@ -264,11 +260,13 @@ parallel with the rest of the ARC optimization work.
 But, in the long run, we want to enforce these ownership invariants all
 throughout the SIL pipeline implying these ownership qualified `load`, `store`
 instructions must be processed by IRGen, not eliminated by the SILOwnershipModel
-eliminator. Thus we will need to update passes to handle these new
-instructions. The main optimizer changes can be separated into the following
-areas: memory forwarding, dead stores, ARC optimization. In all of these cases,
-the necessary changes are relatively trivial to respond to. We give a quick
-taste of two of them: store->load forwarding and ARC Code Motion.
+eliminator. Thus we will need to update passes to handle these new instructions
+and also will need to implement the `load_borrow`, `end_borrow` instruction.
+
+The main optimizer changes can be separated into the following areas: memory
+forwarding, dead stores, ARC optimization. In all of these cases, the necessary
+changes are relatively trivial to respond to. We give a quick taste of two of
+them: store->load forwarding and ARC Code Motion.
 
 ### store->load forwarding
 
