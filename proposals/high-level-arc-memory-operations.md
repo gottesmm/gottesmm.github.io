@@ -12,7 +12,7 @@ categories: proposals
 - [Summary](#summary)
 - [Definitions](#definitions)
     - [ownership qualified load](#ownership-qualified-load)
-    - [load_borrow and borrow_end](#loadborrow-and-borrowend)
+    - [load_borrow and end_borrow](#loadborrow-and-endborrow)
     - [ownership qualified store](#ownership-qualified-store)
 - [Implementation](#implementation)
     - [Goals](#goals)
@@ -39,7 +39,7 @@ This document proposes:
    `[trivial]`.
 2. adding the following ownership qualifiers to `store`: `[init]`, `[assign]`,
    `[trivial]`.
-3. adding the `load_borrow` instruction and the `borrow_end` instruction.
+3. adding the `load_borrow` instruction and the `end_borrow` instruction.
 3. requiring all `load` and `store` operations to have ownership qualifiers.
 4. banning the use of `load [trivial]`, `store [trivial]` on memory locations of
    `non-trivial` type.
@@ -88,13 +88,13 @@ Then define `load [take]` as:
 owns the result object (i.e. a take is a move). Loading from the memory location
 again without reinitialization is illegal.
 
-## load_borrow and borrow_end
+## load_borrow and end_borrow
 
-Next we provide `load_borrow` and `borrow_end`:
+Next we provide `load_borrow` and `end_borrow`:
 
     %x = load_borrow %x_ptr : $*Builtin.NativeObject
     ...
-    borrow_end %x, %x_ptr : $*Builtin.NativeObject
+    end_borrow %x, %x_ptr : $*Builtin.NativeObject
 
       =>
 
@@ -104,7 +104,7 @@ Next we provide `load_borrow` and `borrow_end`:
     fixLifetime %x_ptr : $*Builtin.NativeObject
 
 `load [borrow]` implies that in the region between the `load` and the
-`borrow_end`, the loaded object must semantically remain alive. The `borrow_end`
+`end_borrow`, the loaded object must semantically remain alive. The `end_borrow`
 communicates to the optimizer:
 
 1. That the value in `%x_ptr` should not be destroyed before endBorrow.
@@ -120,9 +120,9 @@ boundary is safe.
 *NOTE* since the SILOwnershipModelEliminator will not process these
 instructions, endLifetime is just a strawman instruction that will not be
 implemented. In practice though, IRGen will need to create a suitable barrier to
-ensure that LLVM does not move any uses of %x past the fixLifetime instruction
-of `%x_ptr` once we begin creating such instructions as a result of ARC
-optimization.
+ensure that LLVM does not move any uses of `%x` past the `fixLifetime`
+instruction of `%x_ptr` once we begin creating such instructions as a result of
+ARC optimization.
 
 ## ownership qualified store
 
@@ -213,14 +213,14 @@ changed as a result of this step.
 Parsing for the rest of the qualifiers. SILGen will not be modified at this
 stage.
 
-4. The `load_borrow` and `borrow_end` instructions will be created. These will
+4. The `load_borrow` and `end_borrow` instructions will be created. These will
    only have SIL, IRGen, Serialization, SIL Printing, and SIL Parsing support
    added.
 
 5. A pass called the "OwnershipModelEliminator" will be implemented. It will
    blow up all `load`, `store` instructions with non `*::Unqualified` ownership
    into their constituant ARC operations and `*::Unqualified` `load`, `store`
-   insts. It will not process `load_borrow` and `borrow_end` since currently it
+   insts. It will not process `load_borrow` and `end_borrow` since currently it
    is not expected for SILGen to emit such instructions.
 
 3. An option called "EnforceSILOwnershipMode" will be added to the verifier. If
@@ -232,7 +232,7 @@ the option is set, the verifier will assert if:
    b. `load`, `store` operation with unqualified ownership type are present in
    the IR.
 
-   c. `load_borrow` or `borrow_end` are present in the IR. This is because
+   c. `load_borrow` or `end_borrow` are present in the IR. This is because
    currently we do not support SIL containing such instructions in SIL
    Ownership Mode. Once we have the ability to verify borrowing scopes, this
    will no longer be the case, but this is a different proposal.
@@ -322,7 +322,7 @@ cases.
 The main implication for ARC optimization is that instead of eliminating just
 retains, releases, it must be able to recognize ownership qualified `load`,
 `store` and set their flags as appropriate. Also in general ARC optimization and
-memory behavior will need to recognize the borrow_end instruction as a code
+memory behavior will need to recognize the `end_borrow` instruction as a code
 motion barrier.
 
 ### Function Signature Optimization
