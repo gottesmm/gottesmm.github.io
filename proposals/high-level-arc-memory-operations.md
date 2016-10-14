@@ -213,13 +213,17 @@ changed as a result of this step.
 Parsing for the rest of the qualifiers. SILGen will not be modified at this
 stage.
 
-5. A pass called the "OwnershipModelEliminator" will be implemented. It will
+4. The `load_borrow` and `end_borrow` instructions will be implemented in SIL,
+   IRGen, Serialization, SIL Printing, and SIL Parsing. They will not be used
+   immediately.
+
+4. A pass called the "OwnershipModelEliminator" will be implemented. It will
    blow up all `load`, `store` instructions with non `*::Unqualified` ownership
    into their constituant ARC operations and `*::Unqualified` `load`, `store`
    insts. It will not process `load_borrow` and `end_borrow` since currently it
    is not expected for SILGen to emit such instructions.
 
-3. An option called "EnforceSILOwnershipMode" will be added to the verifier. If
+5. An option called "EnforceSILOwnershipMode" will be added to the verifier. If
 the option is set, the verifier will assert if:
 
    a. `load`, `store` operations with trivial ownership are applied to memory
@@ -254,7 +258,7 @@ reuse that flag for further SILOwnershipModel changes.
 
 Since the SILOwnershipModel eliminator will eliminate the ownership qualifiers
 on load, store instructions right after ownership verification, there will be no
-immediate affects on the optimizer and thus the optimizer changes can be done in
+immediate effects on the optimizer and thus the optimizer changes can be done in
 parallel with the rest of the ARC optimization work.
 
 But, in the long run, we want to enforce these ownership invariants all
