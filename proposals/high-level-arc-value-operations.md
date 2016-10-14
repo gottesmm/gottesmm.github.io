@@ -91,57 +91,54 @@ proposal has been implemented. First we perform the following preliminary work:
 2. The "OwnershipModelEliminator" will be taught to transform `copy_value`,
    `copy_unowned_value`, `destroy_value` into their constituant operations.
 
-3. The verifier when in EnforceSILOwnershipMode will verify that none of the
-   instructions that we wish to remove are in the IR.
-
 Then we wire up the building blocks:
 
 1. SILGen will be taught to emit `copy_value`, `copy_unowned_value`, and
-   `destroy_value`.
+   `destroy_value` instead of `strong_retain`, `retain_value`, `strong_release`,
+   `release_value`, and `strong_retain_unowned`.
 
 2. The pass manager will not require any changes due to previous work
    in [High Level ARC Memory Operations](high-level-arc-memory-operations).
+
+3. The verifier when in EnforceSILOwnershipMode will verify that none of the
+   instructions that we wish to remove are in the IR.
 
 ## Optimizer Changes
 
 Since the SILOwnershipModel eliminator will eliminate the `copy_value`,
 `copy_unowned_value`, and `destroy_value` operations right after ownership
 verification, there will be no immediate effects on the optimizer and thus the
-optimizer changes can be done in parallel with the rest of the ARC optimization
-work. But in the long run, IRGen must handle these instructions so ownership
-invariants can be enforced all throughout the SIL pipeline.
-
-The high level implementation plan is to 
-The high level plan is to eliminate all direct references to the deleted
-instructions in the SIL Optimization utilities and passes and instead use free
-standing utility functions to allow a pass to support both cases. In order to
-distinguish in between `strong_*` and `*_value` cases, we will use the type of
-the value passed into the `copy_value` or `destroy_value`. This in combination
-with the verifier will ensure that we are able to catch any cases where we
-missed
+optimizer changes can be done in parallel with the rest of the SIL Ownership
+work. But in the long run, we want these instructions to be lowered by IRGen
+implying that we must consider how this will affect the rest of the optimizer
+pipeline.
 
 We now go through all of the passes that will need updating to handle these
 changes:
 
 ### ARC Optimizer
 
-The main changes to the ARC optimizer is that the ARC optimizer will have to
-emit `copy_value`, `destroy_value` instructions instead of retain, release
-instructions. Since we are not enforcing pairing now, the ARC optimizer does not
-in response to this change need to ensure proper pairings are created after
-eliminating retain/release pairs.
+Since the ARC optimizer does not perform code motion any more, only minimal
+changes will be required. Specifically, all we must do is recognize copy_value
+as a retain instruction and destroy_value as a release instruction. Everything
+then will *just* work.
 
 ### ARC Code Motion and Function Signature Optimization
 
 Both of these passes will need to recognize `copy_value`, `destroy_value`
 instructions as retain, release and be changed to emit `copy_value` or
-`destroy_value` instead of retain, release instructions.
+`destroy_value` instead of retain, release instructions. In the case of ARC code
+motion rather than just re-emitting retain, release instructions without
+considering use-def lists, it must now consider such issues to ensure that we do
+not violate use-def dominance.
 
-### Lower Aggregate Instrs
+### Misc compiler Peepholes: SILCombine, Mandatory Inlining, etc.
 
-This pass will need to no longer blow up destroy_value operations.
+There are many peepholes in the compiler that emit retain, release instructions
+for ARC optimizations to clean up later. These must be updated to use the new
+instructions. This will be mechanical.
 
-### SILCombine
+### Side Effects
 
-There are some peepholes here that will need to be rewritten to recognize
-copy_value, destroy_value.
+The side effects subsystem needs to be updated to handle copy_value like it does
+a retain and destroy_value like it does a release. This should be mechanical.
