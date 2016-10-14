@@ -308,8 +308,10 @@ any loss of generality, lets consider solely `store`.
 
 If ARC Code Motion wishes to move the ARC semantics of ownership qualified
 `load`, `store` instructions, it must now consider read/write effects. On the
-other hand, it will be able to now not consider the side-effects of destructors
-when moving retain/release operations.
+other hand, we can perform more aggressive ARC code motion of ownership
+qualified loads and stores in the face of deinits. This is because we no longer
+need to worry about our code motion causing a deinit to fire in between (without
+any loss of generality) the load/retain.
 
 ### Normal Code Motion
 
