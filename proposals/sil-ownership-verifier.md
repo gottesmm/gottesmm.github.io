@@ -8,7 +8,10 @@ categories: proposals
 **Table of Contents**
 
 - [Summary](#summary)
-    - [](#)
+- [Representing Ownership in SIL](#representing-ownership-in-sil)
+- [Mapping ValueBase to ValueOwnershipKind](#mapping-valuebase-to-valueownershipkind)
+- [Proving Def-Use Convention Correctness](#proving-def-use-convention-correctness)
+- [Identifying Ownership Dataflow Errors](#identifying-ownership-dataflow-errors)
 
 <!-- markdown-toc end -->
 
