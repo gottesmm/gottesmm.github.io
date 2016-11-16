@@ -25,17 +25,16 @@ This document proposes the addition of the following new SIL instructions:
 2. `begin_borrow`
 3. `tuple_destructure`, `struct_destructure`, `destructure_result`
 
-These are necessary to express the following operations in SILGen:
+These are necessary to express the following operations in Semantic SIL:
 
 1. Passing an `@guaranteed` value to an `@in_guaranteed` argument without
-   copy. (`store_borrow`)
-<!-- 2. Passing an `@owned` value as an `@inout` argument without
-   copy. (store_borrow [inout], end_inout_borrow) -->
-3. Copying a field from an `@owned` aggregate without consuming the
+   performing a copy. (`store_borrow`)
+2. Copying a field from an `@owned` aggregate without consuming or copying the entire
    aggregate. (`begin_borrow`)
-4. Passing an `@owned` value as an `@guaranteed` argument (`begin_borrow`)
-5. Performing a destructure take operation when emitting multiply operations
-   in a statement. (`tuple_destructure`, `struct_destructure`, `destructure_result`).
+3. Passing an `@owned` value as an `@guaranteed` argument parameter.
+4. Taking a field from an `@owned` aggregate without performing extra copy
+   operations. (`tuple_destructure`, `struct_destructure`,
+   `destructure_result`).
 
 # Definitions
 
@@ -155,6 +154,10 @@ But using `begin_borrow`, this operation can be expressed as:
         return %3 : $Builtin.NativeObject
     }
 
+`begin_borrow` also allows for the explicit borrowing of an `@owned` value for
+the purpose of passing the value off to an `@guaranteed` parameter. This is
+obvious and is left to the reader.
+
 ## tuple_destructure, struct_destructure, destructure_result
 
 In SILGen, take operations are used to forward values in between sub-expressions
@@ -216,8 +219,7 @@ implying an unneeded `destroy_value` operation:
         destroy_value %0 : $S
     }
 
-To represent this code sequence optimally, we instead use a take destructuring
-operation:
+This code path is better represented via a destructuring operation:
 
     sil @foo : $@convention(thin) (@owned S) -> () {
     bb0(%0 : $S):
@@ -233,6 +235,3 @@ operation:
         dealloc_stack %1 : $*S
         destroy_value %0 : $S
     }
-
-yielding optimal SILGen code that can be optimized down to 2 `destroy_value`,
-one on each field of `%0`.
