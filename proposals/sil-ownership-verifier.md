@@ -41,11 +41,15 @@ to vend these values.
 that verifies that a `SILInstruction`'s operands have ownership that is
 compatible with the `SILInstruction`'s ownership.
 
+These 3 points will enable for all def-use edges in SIL to be statically
+verified as obeying ownership semantics.
+
 Define `ValueOwnershipKind` as follows:
 
-     /// The ownership semantics of a use-def edge.
+     /// The ownership semantics of a def-use edge.
      enum class ValueOwnershipKind {
 
+       /// Represents an unknown ownership 
        /// Represents the ownership of a value that has not been audited or is
        /// actually undefined. A def that produces a value with unknown
        /// ownership can not be paired with any use that does not have Unknown

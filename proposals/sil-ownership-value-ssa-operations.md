@@ -42,21 +42,20 @@ These are necessary to express the following operations in Semantic SIL:
 
 Define `store_borrow` as:
 
-    %borrowed_y = store_borrow %x to %y : $*T
+    store_borrow %x to %y : $*T
     ...
-    end_borrow %borrowed_y from %x : $*T, $T
+    end_borrow %y from %x : $*T, $T
 
       =>
 
     store %x to %y
-    ...
-    end_borrow %x from %y
 
 `store_borrow` is needed to convert `@guaranteed` values to `@in_guaranteed`
 arguments. Without a `store_borrow`, this can only be expressed via an
 inefficient `copy_value` + `store` + `load` + `destroy_value` sequence:
 
     sil @g : $@convention(thin) (@in_guaranteed Foo) -> ()
+
     sil @f : $@convention(thin) (@guaranteed Foo) -> () {
     bb0(%0 : $Foo):
       %1 = function_ref @g : $@convention(thin) (@in_guaranteed Foo) -> ()
@@ -72,91 +71,41 @@ inefficient `copy_value` + `store` + `load` + `destroy_value` sequence:
 
 `store_borrow` allows us to express this in a more efficient and expressive SIL:
 
-    sil @g : $@convention(thin) (@in_guaranteed Foo) -> ()
     sil @f : $@convention(thin) (@guaranteed Foo) -> () {
     bb0(%0 : $Foo):
       %1 = function_ref @g : $@convention(thin) (@in_guaranteed Foo) -> ()
       %2 = alloc_stack $Foo
-      %3 = store_borrow %0 to %2 : $*T
-      apply %1(%3) : $@convention(thin) (@in_guaranteed Foo) -> ()
-      end_borrow %3 from %0 : $*T, $T
+      store_borrow %0 to %2 : $*T
+      apply %1(%2) : $@convention(thin) (@in_guaranteed Foo) -> ()
+      end_borrow %2 from %0 : $*T, $T
       dealloc_stack %2 : $Foo
       ...
     }
+
+**NOTE** Once `@in_guaranteed` arguments become passed as values, `store_borrow`
+will no longer be necessary.
 
 ## begin_borrow
 
 Define a `begin_borrow` instruction as:
 
     %borrowed_x = begin_borrow %x : $T
-    ...
+    %borrow_x_field = struct_extract %borrowed_x : $T, #T.field
+    apply %f(%borrowed_x) : $@convention(thin) (@guaranteed T) -> ()
     end_borrow %borrowed_x from %x : $T, $T
-    
-      =>
-    
-    %xhat = fake_identity_inst %x : $T
-    ...
-    fix_lifetime(%xhat)
-    fix_lifetime(%x)
 
+      =>
+
+    %x_field = struct_extract %x : $T, #T.field
+    apply %f(%x_field) : $@convention(thin) (@guaranteed T) -> ()
+    
 A `begin_borrow` instruction explicitly converts an `@owned` value to a
 `@guaranteed` value. The result of the `begin_borrow` is paired with an
 `end_borrow` instruction that explicitly represents the end scope of the
 `begin_borrow`.
 
-Without this instruction, we can not copy out sub-projections from an aggregate
-without storing to memory or performing extra, `copy_value`,
-`destroy_values`. Consider the following SIL:
-
-    struct Foo {
-      var x: Builtin.NativeObject
-      var y: Builtin.NativeObject
-    }
-
-    sil @g : $@convention(thin) (@owned Builtin.NativeObject) -> ()
-    sil @f : $@convention(thin) (@owned Foo) -> Builtin.NativeObject {
-    bb0(%0 : $Foo):
-        %1 = struct_extract %0 : $Foo, #Foo.x
-        %2 = copy_value %1 : $Builtin.NativeObject
-        %3 = function_ref @g : $@convention(thin) (@owned Foo) -> ()
-        %4 = apply %3(%0) : $@convention(thin) (@owned Foo) -> ()
-        return %2 : $Builtin.NativeObject
-    }
-
-In Semantic SIL this is illegal since `%0` is consumed by `%1` and `%4`. We
-could express this via a destructure take operation (see below), but we would
-need to introduce to copy and destroy `#Foo.y` unnecessarily:
-
-    sil @g : $@convention(thin) (@owned Builtin.NativeObject) -> ()
-    sil @f : $@convention(thin) (@owned Foo) -> Builtin.NativeObject {
-    bb0(%0 : $Foo):
-        %1 = copy_value %0 : $Foo
-        %2 = struct_destructure $1 : $Foo
-        %3 = destructure_result %2 : #Foo.x
-        %4 = destructure_result %2 : #Foo.y
-        %5 = function_ref @g : $@convention(thin) (@owned Foo) -> ()
-        apply %5(%0) : $@convention(thin) (@owned Foo) -> ()
-        destroy_value %4 : $Builtin.NativeObject
-        return %3 : $Builtin.NativeObject
-    }
-
-But using `begin_borrow`, this operation can be expressed as:
-
-    sil @g : $@convention(thin) (@owned Builtin.NativeObject) -> ()
-    sil @f : $@convention(thin) (@owned Foo) -> Builtin.NativeObject {
-    bb0(%0 : $Foo):
-        %1 = begin_borrow %0 : $Foo
-        %2 = struct_extract %1 : $Foo, #Foo.x
-        %3 = copy_value %2 : $Builtin.NativeObject
-        end_borrow %1 from %0 : $Foo, $Foo
-        %4 = function_ref @g : $@convention(thin) (@owned Foo) -> ()
-        apply %4(%0) : $@convention(thin) (@owned Foo) -> ()
-        return %3 : $Builtin.NativeObject
-    }
-
 `begin_borrow` also allows for the explicit borrowing of an `@owned` value for
-the purpose of passing the value off to an `@guaranteed` parameter. This is
-obvious and is left to the reader.
+the purpose of passing the value off to an `@guaranteed` parameter.
 
 ## tuple_destructure, struct_destructure, destructure_result
 
