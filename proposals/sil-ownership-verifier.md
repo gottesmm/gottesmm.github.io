@@ -15,41 +15,64 @@ categories: proposals
 
 <!-- markdown-toc end -->
 
-
 # Summary
 
-This document proposes an ownership verifier to ensure that a SIL program is
-ownership correct. To implement this we:
+This document defines a SIL ownership model and a verifier that enforces this
+model. Both of these together allow for a program in SIL to be verified as
+satisfying all Swift lifetime constraints.
 
-1. Define a lattice of ownership kinds. (`ValueOwnershipKind`)
-2. Define a method of assigning a `ValueOwnershipKind` to all `ValueBase`.
-3. Define a method of verifying that all uses of a SIL def satisfy the def's
-   ownership constraints.
-4. Define a method for verifying that ownership dataflow constraints are
-   preserved by SIL SSA values and defs.
+# SIL Ownership Model
 
-# Representing Ownership in SIL
+We define the SIL ownership model by embedding ownership into SIL's SSA
+def-use edges. This is done by:
 
-In Semantic SIL, all ownership relations are represented in SSA form along
-def-use edges. We propose implementing this by:
+1. Defining a meet lattice of ownership kinds
+2. Defining all def-use edges as having an ownership kind produced by the edge's
+   def and consumed by the edge's use.
+3. Defining a program as being malformed if all def-use edges do not have
+   compatible produced and consumed ownership kinds.
 
-1. Defining an enum called `ValueOwnershipKind` that specifies possible
-ownership along a def-use edge.
-2. Implementing the API `ValueOwnershipKind ValueBase::getOwnershipKind() const`
-to vend these values.
-3. Implementing the API `void SILInstruction::verifyOperandOwnership() const`
-that verifies that a `SILInstruction`'s operands have ownership that is
-compatible with the `SILInstruction`'s ownership.
+First, define the meet pseudo-lattice via the enum `ValueOwnershipKind` and the
+following cases:
 
-These 3 points will enable for all def-use edges in SIL to be statically
-verified as obeying ownership semantics.
+* `Trivial`
+* `Unowned`
+* `Owned`
+* `Guaranteed`
+* `InOut`
+* `Any`
+* `Unknown`
 
-Define `ValueOwnershipKind` as follows:
+Each one of these ownership kinds corresponds to already well known categories
+of SIL ownership, but there are two new cases: `Any` and `Unknown`. We define
+these as follows:
+
+* `Any`. `⊤` of the lattice. A def that can be paired with a use accepting any
+ownership kind. This is needed for SILUndef. A use that accepts `Any` ownership
+kind is able to be paired with a def with any ownership kind. This is needed for
+instructions like `copy_value`. `Any` is the `top` element of the lattice.
+* `Unknown`. `⊥` of the lattice. This is only produced when attempting to
+intersect lattice elements that are incompatible with each other.
+
+We define our meet operation (with `*` meaning `Unknown`) via the following chart:
+
+| Meet Op      | `Trivial` | `Unowned` | `Owned` | `Guaranteed` | `InOut` | `Any`        | `Unknown` |
+|--------------|-----------|-----------|---------|--------------|---------|--------------|-----------|
+| `Trivial`    | `Trivial` | `*`       | `*`     | `*`          | `*`     | `Trivial`    | `*`       |
+| `Unowned`    | `*`       | `Unowned` | `*`     | `*`          | `*`     | `Unowned`    | `*`       |
+| `Owned`      | `*`       | `*`       | `Owned` | `*`          | `*`     | `Owned`      | `*`       |
+| `Guaranteed` | `*`       | `*`       | `*`     | `Guaranteed` | `*`     | `Guaranteed` | `*`       |
+| `InOut`      | `*`       | `*`       | `*`     | `*`          | `InOut` | `InOut`      | `*`       |
+| `Any`        | `Trivial` | `Unowned` | `Owned` | `Guaranteed` | `InOut` | `Any`        | `*`       |
+| `Unknown`    | `*`       | `*`       | `*`     | `*`          | `*`     | `*`          | `*`       |
+
+<!--
 
      /// The ownership semantics of a def-use edge.
      enum class ValueOwnershipKind {
 
-       /// Represents an unknown ownership 
+       /// Represents unaddited ownership.
+       ///
        /// Represents the ownership of a value that has not been audited or is
        /// actually undefined. A def that produces a value with unknown
        /// ownership can not be paired with any use that does not have Unknown
@@ -82,9 +105,25 @@ Define `ValueOwnershipKind` as follows:
      };
 
 
+1. Defining an enum called `ValueOwnershipKind` that specifies possible
+ownership along a def-use edge.
+2. Implementing the API `ValueOwnershipKind ValueBase::getOwnershipKind() const`
+to vend these values.
+3. Implementing the API `void SILInstruction::verifyOperandOwnership() const`
+that verifies that a `SILInstruction`'s operands have ownership that is
+compatible with the `SILInstruction`'s ownership.
+
+These 3 points will enable for all def-use edges in SIL to be statically
+verified as obeying ownership semantics.
+
+Define `ValueOwnershipKind` as follows:
+
+
+
 
 # Mapping ValueBase to ValueOwnershipKind
 
 # Proving Def-Use Convention Correctness
 
 # Identifying Ownership Dataflow Errors
+-->
