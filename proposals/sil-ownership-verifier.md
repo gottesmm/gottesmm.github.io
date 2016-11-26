@@ -24,15 +24,16 @@ satisfying all Swift lifetime constraints.
 # SIL Ownership Model
 
 We define the SIL ownership model by embedding ownership into SIL's SSA
-def-use edges. This is done by:
+def-use edges. This is done by defining:
 
-1. Defining a meet lattice of ownership kinds
-2. Defining all def-use edges as having an ownership kind produced by the edge's
-   def and consumed by the edge's use.
-3. Defining a program as being malformed if all def-use edges do not have
-   compatible produced and consumed ownership kinds.
+1. A bottom pseudo-lattice of ownership kinds.
+2. All def-use edges as having an ownership kind produced by the edge's def and
+   consumed by the edge's use.
+3. A SIL program as being well formed iff all def-use edges have def-use
+   ownership kinds that when intersected do not yield
+   `ValueOwnershipKind::Invalid`.
 
-First, define the meet pseudo-lattice via the enum `ValueOwnershipKind` and the
+First, define the bottom pseudo-lattice via the enum `ValueOwnershipKind` and the
 following cases:
 
 * `Trivial`
@@ -41,22 +42,22 @@ following cases:
 * `Guaranteed`
 * `InOut`
 * `Any`
-* `Unknown`
+* `Invalid`
 
 Each one of these ownership kinds corresponds to already well known categories
-of SIL ownership, but there are two new cases: `Any` and `Unknown`. We define
+of SIL ownership, but there are two new cases: `Any` and `Invalid`. We define
 these as follows:
 
 * `Any`. `⊤` of the lattice. A def that can be paired with a use accepting any
 ownership kind. This is needed for SILUndef. A use that accepts `Any` ownership
 kind is able to be paired with a def with any ownership kind. This is needed for
 instructions like `copy_value`. `Any` is the `top` element of the lattice.
-* `Unknown`. `⊥` of the lattice. This is only produced when attempting to
+* `Invalid`. `⊥` of the lattice. This is only produced when attempting to
 intersect lattice elements that are incompatible with each other.
 
-We define our meet operation (with `*` meaning `Unknown`) via the following chart:
+We define our bottom operation (with `*` meaning `Invalid`) via the following chart:
 
-| Meet Op      | `Trivial` | `Unowned` | `Owned` | `Guaranteed` | `InOut` | `Any`        | `Unknown` |
+| Bottom Op    | `Trivial` | `Unowned` | `Owned` | `Guaranteed` | `InOut` | `Any`        | `Invalid` |
 |--------------|-----------|-----------|---------|--------------|---------|--------------|-----------|
 | `Trivial`    | `Trivial` | `*`       | `*`     | `*`          | `*`     | `Trivial`    | `*`       |
 | `Unowned`    | `*`       | `Unowned` | `*`     | `*`          | `*`     | `Unowned`    | `*`       |
@@ -64,7 +65,15 @@ We define our meet operation (with `*` meaning `Unknown`) via the following char
 | `Guaranteed` | `*`       | `*`       | `*`     | `Guaranteed` | `*`     | `Guaranteed` | `*`       |
 | `InOut`      | `*`       | `*`       | `*`     | `*`          | `InOut` | `InOut`      | `*`       |
 | `Any`        | `Trivial` | `Unowned` | `Owned` | `Guaranteed` | `InOut` | `Any`        | `*`       |
-| `Unknown`    | `*`       | `*`       | `*`     | `*`          | `*`     | `*`          | `*`       |
+| `Invalid`    | `*`       | `*`       | `*`     | `*`          | `*`     | `*`          | `*`       |
+
+With this in hand, we then classify all instructions def ownership as follows:
+
+1. No Result.
+2. Constant Ownership.
+3. Special Ownership.
+
+Fortunately, most SIL instructions have a constant ownership.
 
 <!--
 
@@ -75,7 +84,7 @@ We define our meet operation (with `*` meaning `Unknown`) via the following char
        ///
        /// Represents the ownership of a value that has not been audited or is
        /// actually undefined. A def that produces a value with unknown
-       /// ownership can not be paired with any use that does not have Unknown
+       /// ownership can not be paired with any use that does not have Invalid
        /// or Any ownership.
        Undefined,
 
