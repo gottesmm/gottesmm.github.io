@@ -17,19 +17,23 @@ categories: proposals
 
 # Summary
 
-This document defines a SIL ownership model and a verifier that enforces this
-model. Both of these together allow for a program in SIL to be verified as
-satisfying all Swift lifetime constraints.
+This document defines a SIL ownership model and a verifier for the ownership
+model. Both of these together allow for the static verification that a SIL
+program satisfies all ownership model constraints. This provides a model of
+semantics that SILGen can then target and use to implement ownership model
+correct Swift programs.
+
+**TODO** Make this better.
 
 # SIL Ownership Model
 
-We define the SIL ownership model by embedding ownership into SIL's SSA
-def-use edges. This is done by defining:
+The SIL ownership model embeds ownership into SIL's SSA def-use edges. This is
+accomplished by:
 
-1. A bottom pseudo-lattice of ownership kinds.
-2. All def-use edges as having an ownership kind produced by the edge's def and
-   consumed by the edge's use.
-3. A SIL program as being well formed iff all def-use edges have def-use
+1. Specifying a bottom pseudo-lattice of ownership kinds.
+2. Requiring all def-use edges as having an ownership kind produced by the
+   edge's def and consumed by the edge's use.
+3. Defining SIL program as being well formed iff all def-use edges have def-use
    ownership kinds that when intersected do not yield
    `ValueOwnershipKind::Invalid`.
 
@@ -67,13 +71,26 @@ We define our bottom operation (with `*` meaning `Invalid`) via the following ch
 | `Any`        | `Trivial` | `Unowned` | `Owned` | `Guaranteed` | `InOut` | `Any`        | `*`       |
 | `Invalid`    | `*`       | `*`       | `*`     | `*`          | `*`     | `*`          | `*`       |
 
-With this in hand, we then classify all instructions def ownership as follows:
+Now that we have defined intersection, we categorize all ValueBase into sets
+depending on the ValueBase's result ownership properties (if a result
+exists). These categories are:
 
-1. No Result.
-2. Constant Ownership.
-3. Special Ownership.
+1. *No Result*. A ValueBase without a result.
+2. *Constant Ownership*. A ValueBase with a result that always produces the same
+   ownership kind.
+3. *Forwarding Ownership*. A ValueBase that is an Instruction whose result is
+   always equivalent to the same ownership kind as one of the instruction's operands.
+4. *Special Ownership*. An instruction with special rules for propagating
+   ownership. This includes ValueBase such as ApplyInst, SILArgument, and
+   TryApply.
 
-Fortunately, most SIL instructions have a constant ownership.
+Using these categories, we implement a method on ValueBase called
+ValueBase::getOwnershipKind(). This will be implemented using a visitor to
+ensure that warnings are provided when engineers add new ValueBase and do not 
+
+A visitor will be used to implement this code ensuring that a warning will be
+provided if an engineer adds a new ValueBase and does not add support for
+implementing getOwnershipKind();
 
 <!--
 
