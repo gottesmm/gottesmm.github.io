@@ -43,7 +43,7 @@ edges. This is accomplished by:
    (e.g. `SILInstruction`) and the values produced by defs
    (e.g. `SILValue`). This is needed to model values as having ownership and
    defs as not having ownership. The main implication here is that the two can
-   no longer be implicitly convertable and the API must enforce this.
+   no longer be implicitly convertible and the API must enforce this.
 
    b. Introducing a new value called a `ValueBundle` that enables multiple
    return values to be implemented using projection operations.
@@ -60,15 +60,16 @@ edges. This is accomplished by:
 
 # Eliminating Ownership Representation Issues in SIL
 
-All values in SIL are defined via an assignment statement like: `<foo> = <bar>`.
-In English, we say `foo` is a value that is defined by the def `bar`. Originally
-in SIL, these two concepts were distinct concepts represented by the `SILValue`
-and `ValueBase` classes. All `ValueBase` produced a list of `SILValue`s that
-from were related, but not equivalent to the `ValueBase`. With the decision to
-represent multiple return values as instruction projections instead of as a list
-of `SILValue`, this distinction in between a def and the values was lost,
-resulting in `SILValue` being used interchangeably with `ValueBase`. This
-exposes several representation issues when one attempts to add ownership to SIL:
+All values in SIL are defined via an assignment statement of the form: `<foo> = <bar>`.
+In English, we say `foo` is a value that is defined by the def
+`bar`. Originally, these two concepts were distinct concepts represented by the
+`SILValue` and `ValueBase` classes. All `ValueBase` produced a list of
+`SILValues` that from were related, but not equivalent to the defining `ValueBase`. With
+the decision to represent multiple return values as instruction projections
+instead of as a list of `SILValue`, this distinction in between a def and the
+values was lost, resulting in `SILValue` being used interchangeably with
+`ValueBase`. This exposes several representation issues when one attempts to add
+ownership to SIL:
 
 1. Values have ownership, while the defs that define the values do not. This
    implies that defs and values *should not* be interchangeable. Thus we must
