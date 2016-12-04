@@ -92,25 +92,30 @@ In order to model that values, not defs, have ownership, we separate the
 `SILValue` and `ValueBase` APIs. First we rename `ValueBase` to `ValueDef`. This
 makes it clear from a naming perspective that a `ValueDef` is not a value, but
 the def of a value. Then we eliminate eliminate all operator methods on
-`SILValue` that allow one to work with a `SILValue` as a `ValueDef` directly.
+`SILValue` that allow one to work with a `SILValue` as a `ValueDef`
+directly:
 
     class SILValue {
       ...
-      ValueDef *operator->() const;
-      ValueDef &operator*() const;
-      operator ValueDef *() const;
-    
-      bool operator==(ValueDef *RHS) const;
-      bool operator!=(ValueDef *RHS) const;
+      ValueDef *operator->() const; // deleted
+      ValueDef &operator*() const; // deleted
+      operator ValueDef *() const; // deleted
+
+      bool operator==(ValueDef *RHS) const; // deleted
+      bool operator!=(ValueDef *RHS) const; // deleted
       ...
     };
 
-Instead, we provide an explicit named method:
+Instead, we provide an explicit, named method to retrieve a `SILValue`'s def:
 
-    ValueDef *SILValue::getDef() const
+    class SILValue {
+      ...
+      ValueDef *SILValue::getDef() const; // new
+      ...
+    };
 
-This will eliminate code like the following where a SILValue is implicitly used
-as a def,
+This eliminates the following form of code where a `SILValue` is implicitly used
+as a `ValueBase`:
 
     SILValue V;
     ValueDef *Def;
@@ -118,7 +123,7 @@ as a def,
     if (V != Def) { ... }
     if (V->getParentBlock()) { ... }
 
-In favor of the clearer:
+In favor of the explicit:
 
     SILValue V;
     ValueDef *Def;
@@ -126,15 +131,19 @@ In favor of the clearer:
     if (V.getDef() != Def) { ... }
     if (V.getDef()->getParentBlock()) { ... }
 
-Notice how now it is explicit in the code that we are not working with the
-properties of V, but rather with V's def.
+In cases like the above, we want the to increase clarity through the usage of
+verbosity. In other cases, this verboseness makes convenient APIs more difficult
+to use. The main example here are the `isa` and `dyn_cast` APIs. We introduce
+two helper functions that give the same convenience as before but added clarity by
+making it clear that we are not performing an isa query on the value, but
+instead the underlying def of the value:
 
-In cases like the above, we want the verbosity to yield clarity. In other cases,
-this makes certain very convenient APIs more difficult to use. The main example
-here are the `isa` and `dyn_cast` APIs. We introduce helper functions that give
-the same convenience as before but added clarity by making it clear that we are
-not performing an isa query on the value, but instead the underlying def of the
-value. Consider the following code using the old API,
+    template <typename ParentTy>
+    bool def_isa(SILValue V) { return isa<ParentTy>(V.getDef()); }
+    template <typename ParentTy>
+    ParentTy *def_dyn_cast(SILValue V) { return dyn_cast<ParentTy>(V.getDef()); }
+
+Consider the following code using the old API,
 
     SILValue V;
     
@@ -142,9 +151,10 @@ value. Consider the following code using the old API,
     if (auto *PAI = dyn_cast<PartialApplyInst>(V)) { ... }
 
 Notice how it seems like one is casting the SILValue as if it is a
-ValueBase. This is due to the implicit conversion from a SILValue to its
-internal ValueBase. In comparison the new API makes it absolutely clear that one
-is casting the underlying def of the SILValue:
+ValueBase. This is due to the misleading usage of the implicit conversion from a
+`SILValue` to the `SILValue`'s internal `ValueBase`. In comparison the new API
+makes it absolutely clear that one is reasoning about the ValueKind of the
+underlying def of the `SILValue`:
 
     SILValue V;
     
@@ -154,12 +164,15 @@ is casting the underlying def of the SILValue:
 Thus the convenience of the old API is maintained, clarity is improved, and the
 conceptual API boundary is enforced.
 
-The final change that we make is that we eliminate 
-2. Make the constructor `SILValue(ValueDef *)` private and via declaring
-   `ValueDef` subclasses as friend classes, introduce a new API
-   `ValueDef::getValue()` that constructs a `SILValue` from a specific
-   `ValueDef`. This makes conceptual sense since a `SILValue` is defined by a
-   `ValueDef` implying a `ValueDef` should also vend those `SILValue`s.
+The final change that we propose is eliminating the ability to construct a
+`SILValue` from a `ValueDef` externally to the `ValueDef` itself. Allowing this
+to occur violates the modeling notion that a `SILValue` is defined and thus is
+dependent on the `ValueDef`. To implement this, we propose changing the
+constructor `SILValue::SILValue(ValueDef *)` to have private instead of public
+access control and declaring `ValueDef` subclasses as friends of
+`SILValue`. This then allows the `ValueDef` to vend opaquely constructed
+`SILValue`, but disallows external users of the API from directly creating
+`SILValue` from `ValueDef`, enforcing the value/def distinction in our model.
 
 ## Multiple Return Values
 
