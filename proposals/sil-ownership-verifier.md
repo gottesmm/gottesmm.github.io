@@ -51,8 +51,9 @@ edges. This is accomplished by:
 2. Specifying a set of ownership kinds and specifying a method for mapping a
    `SILValue` to an ownership kind.
 
-3. Specifying constraints on all `SILInstruction`s that constrain what ownership
-   kinds their operands can have.
+3. Specifying ownership constraints on all `SILInstruction`s and `SILArgument`s
+   that constrain what ownership kinds their operands and incoming values
+   respectively can possess.
 
 4. Implementing a verifier to ensure that all `SILInstructions` are compatible
    with the ownership kind propagated by the `ValueDef` and that pseudo-linear
