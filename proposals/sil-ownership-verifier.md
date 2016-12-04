@@ -49,19 +49,33 @@ accomplished by:
    with the ownership kind propagated by the `ValueDef` and that pseudo-linear
    dataflow constraints are maintained.
 
-# Clarifying Values and Defs
+# Modeling Values and Defs
 
-Today, `ValueBase` represents both a Value and a Def. This can be seen since
-`SILValue` is essentially a wrapper around `ValueBase` that does not provide any
-real utility. This creates the following representational issues:
+All values in SIL are defined via an assignment statement like the following:
 
-1. Defs (e.g. `SILInstruction`) do not inherently have ownership. The
-`SILValue`s that are the result of a def are what have ownership. This is a
-modeling issue.
-2. Certain SILIns
-produced by `SILInstructioare not distinguished from values (e.g. `SILValue`)
-of themselves do not have ownership. Rather the `SILValue` produced by the
-`SILInstruction` are what have ownership. 
+    <foo> = <bar>
+
+In SIL, we call `foo` a value that is produced by the def `bar`. Originally in
+SIL, these two concepts were represented by the `SILValue` and `ValueBase`
+classes. All `ValueBase` produced a list of `SILValue`s conceptually distinct
+from the `ValueBase`. With the decision to represent multiple return values as
+instruction projections instead of as a list of `SILValue`, this distinction in
+between a def and the values was lost, resulting in `SILValue` being used
+interchangeably with `ValueBase` throughout the compiler via the usage of
+operator-> and implicit conversions. This has worked ok until now, but
+implementing an ownership model at the SIL level exposes several representation
+issues with this model:
+
+1. Defs (e.x. `SILInstruction`) do not have ownership. The value
+   (e.x. `SILValue`) that is defined by a def is what has ownership
+   properties. This suggests that from an API perspective, we must drive an
+   explicit wedge in between `ValueBase` and `SILValue` by eliminating any
+   ability to implicitly convert in between the without the usage of a named
+   method.
+2. Multiple return values via projections can not be represented in SIL. This is
+   necessary for allowing for an efficient destructure take operation. This
+   suggests that we must introduce a special form of value that is used to
+   produce multiple `SILValue` from a singular `ValueBase`.
 
 We propose below a series of transformation to SIL that resolves these
 issues. **NOTE** A condition of this proposed transformation is that today's
