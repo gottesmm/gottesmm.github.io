@@ -10,9 +10,9 @@ categories: proposals
 **Table of Contents**
 
 - [Summary](#summary)
-- [Clarifying Values and Defs](#clarifying-values-and-defs)
-    - [SILNode and ValueDef](#silnode-and-valuedef)
-    - [ValueBundle](#valuebundle)
+- [Eliminating Ownership Representation Issues in SIL](#eliminating-ownership-representation-issues-in-sil)
+    - [Defs and Values](#defs-and-values)
+    - [Multiple Return Values](#multiple-return-values)
 - [ValueOwnershipKind](#valueownershipkind)
 - [Verification of Ownership Semantics](#verification-of-ownership-semantics)
     - [Use Verification](#use-verification)
@@ -176,158 +176,7 @@ access control and declaring `ValueDef` subclasses as friends of
 
 ## Multiple Return Values
 
-Now that we have separated the APIs that relate `SILValue` and `ValueDef`
-cleanly. (TODO Maybe say match the model?), we need to consider how to represent
-multiple return values. Since a key 
-
-introduce the `ValueBundle`. A
-`ValueBundle` is conceptually a "bundle of values" that is represented by an SSA
-value. Its sub-elements can only be extracted by an as yet to be implemented
-`bundle_extract` instruction. In the trivial case (i.e. a unary result), we do
-not represent the `ValueBundle` and `bundle_extract` explicitly. This ensures
-that the current IR we print today is invariant. But in the case of a
-`ValueBundle` with multiple elements, we require that:
-
-1. The `ValueBundle` SSA value is only used by `bundle_extract` instructions.
-2. Each "sub-element" of the `ValueBundle` is taken by a `bundle_extract`
-instruction exactly once along all paths through the program.
-
-This enables `ValueBundles` to be used with `bundle_extract`s to represent
-multiple return values.
-
-Given that a `ValueBundle` is what a `ValueDef` defines, we make `ValueBundle` a
-field on `ValueDef`:
-
-    class ValueDef {
-      ...
-      ValueBundle Bundle;
-    
-    public:
-      ValueBundle *getValues() const;
-      ...
-    }
-
-Given that `ValueBundle` is now on `ValueDef` and it contains the bundle of
-values defined by `ValueDef`, we remove the `SILType` and use-list field in
-`ValueDef` and move those into `ValueBundle`. Thus we define the `ValueBundle`
-API as follows:
-
-    class ValueBundleImpl {
-      Operand *opBegin;
-      Operand *opEnd;
-
-    public:
-      ArrayRef<SILType> getTypes() const {
-        return {getTypeStart(), getNumElements()};
-      }
-
-      using UseListTy =
-        ArrayRefView<std::function<iterator_range<use_iterator> (Operand *)>>;
-      UseListTy getUseLists() const {
-        return make_arrayrefview(ArrayRef<Operand>(opBegin, opEnd),
-            [](Operand *Op) -> iterator_range<use_iterator> {
-              return {use_iterator(Op), use_iterator(nullptr)};
-            });
-        return {opBegin, getNumElements()};
-      }
-
-      unsigned getNumElements() const { return opEnd - opBegin; }
-
-      TrivialValueBundle *getAsTrivial() const {
-        if (getNumElements() != 1)
-          return nullptr;
-        return reinterpret_cast<TrivialValueBundle *>(this);
-      }
-
-      /// Return a range that acts as a flatmap of other ranges.
-      flatmap_range<UseListTy> getAllUses() const {
-        return make_flatmap_range(getUseLists());
-      }
-
-    private:
-      SILType *getTypeStart() const {
-          return reinterpret_cast<SILType *>(this + 1);
-      }
-    };
-
-    template <unsigned NumElts>
-    class ValueBundle : public ValueBundleImpl,
-        protected llvm::TrailingObjects<SILType, Operand *> {
-    public:
-        ValueBundle() : NumElements(NumElts) {}
-    };
-
-    class TrivialValueBundle : ValueBundle<1> {
-      SILType getType() const {
-          return getTypeStart()[0];
-      }
-
-      use_iterator use_begin() const {
-        return use_iterator(opBegin);
-      }
-      
-      use_iterator use_end() const {
-        return use_iterator(nullptr);
-      }
-      
-      iterator_range<use_iterator> getUses() const {
-          return {use_begin(), use_end()};
-      }
-    };
-
-A few things to notice:
-
-1. We explicitly differentiate in the class hierarchy in between the case of
-having a TrivialValueBundle and a NonTrivialValueBundle. We make it easy to go
-from ValueBundle to TrivialValueBundle by using the familiar getAs pattern to
-make it easy to test. Thus when before one would perform:
-
-    for (auto *Use : V->getUses()) {
-      ...
-    }
-
-Instead one performs:
-
-    if (auto *TrivialVB = V->getValues()->getAsTrivial()) {
-      for (auto *Use : TrivialVB->getUses()) {
-        ...
-      }
-    }
-
-If one does not care about whether or not one has a trivial value bundle, there
-is a convenience API for retrieving all uses from all operand lists:
-
-    for (auto *Use : V->getAllUses()) {
-      ...
-    }
-
-Now our SIL hierarchy looks as follows:
-
-    INSERT GRAPHIC HERE
-
-The final change that needs to be made is to separate the notion of Def from
-SILInstruction. We do this by changing SILInstruction to no longer inherit from
-`ValueDef`. Thus `SILInstruction` in of itself . We then introduce a subclass of `SILInstruction` called
-`DefSILInstruction` that is defined as:
-
-    class DefSILInstruction : public SILInstruction, ValueDef {
-      
-    };
-
-Every ValueBundle is at least trivial, so we always have one FirstTy,
-FirstUseList stored inline. The rest of the types/uselists are allocated in a
-trailing objects array.
-
-1. Clarifying that a `ValueBase` is not a value (and thus can not have
-   ownership) and renaming `ValueBase` to `ValueDef`. For the rest of the
-   document we use `ValueDef` instead of `ValueBase`.
-2. Introducing the `ValueBundle` as the group of values that are defined by a
-   `ValueDef`. A `ValueBundle` is just a group of values and is not a value
-   itself.
-3. Explicitly defining a `SILValue` as a sub-element of a `ValueBundle` with an
-   ownership kind.
-4. Introducing a new subclass 
-
+Maybe?
 
 # ValueOwnershipKind
 
@@ -779,4 +628,160 @@ Define `ValueOwnershipKind` as follows:
 # Proving Def-Use Convention Correctness
 
 # Identifying Ownership Dataflow Errors
+-->
+<!--
+## Multiple Return Values
+
+Now that we have separated the APIs that relate `SILValue` and `ValueDef`
+cleanly. (TODO Maybe say match the model?), we need to consider how to represent
+multiple return values. Since a key 
+
+introduce the `ValueBundle`. A
+`ValueBundle` is conceptually a "bundle of values" that is represented by an SSA
+value. Its sub-elements can only be extracted by an as yet to be implemented
+`bundle_extract` instruction. In the trivial case (i.e. a unary result), we do
+not represent the `ValueBundle` and `bundle_extract` explicitly. This ensures
+that the current IR we print today is invariant. But in the case of a
+`ValueBundle` with multiple elements, we require that:
+
+1. The `ValueBundle` SSA value is only used by `bundle_extract` instructions.
+2. Each "sub-element" of the `ValueBundle` is taken by a `bundle_extract`
+instruction exactly once along all paths through the program.
+
+This enables `ValueBundles` to be used with `bundle_extract`s to represent
+multiple return values.
+
+Given that a `ValueBundle` is what a `ValueDef` defines, we make `ValueBundle` a
+field on `ValueDef`:
+
+    class ValueDef {
+      ...
+      ValueBundle Bundle;
+    
+    public:
+      ValueBundle *getValues() const;
+      ...
+    }
+
+Given that `ValueBundle` is now on `ValueDef` and it contains the bundle of
+values defined by `ValueDef`, we remove the `SILType` and use-list field in
+`ValueDef` and move those into `ValueBundle`. Thus we define the `ValueBundle`
+API as follows:
+
+    class ValueBundleImpl {
+      Operand *opBegin;
+      Operand *opEnd;
+
+    public:
+      ArrayRef<SILType> getTypes() const {
+        return {getTypeStart(), getNumElements()};
+      }
+
+      using UseListTy =
+        ArrayRefView<std::function<iterator_range<use_iterator> (Operand *)>>;
+      UseListTy getUseLists() const {
+        return make_arrayrefview(ArrayRef<Operand>(opBegin, opEnd),
+            [](Operand *Op) -> iterator_range<use_iterator> {
+              return {use_iterator(Op), use_iterator(nullptr)};
+            });
+        return {opBegin, getNumElements()};
+      }
+
+      unsigned getNumElements() const { return opEnd - opBegin; }
+
+      TrivialValueBundle *getAsTrivial() const {
+        if (getNumElements() != 1)
+          return nullptr;
+        return reinterpret_cast<TrivialValueBundle *>(this);
+      }
+
+      /// Return a range that acts as a flatmap of other ranges.
+      flatmap_range<UseListTy> getAllUses() const {
+        return make_flatmap_range(getUseLists());
+      }
+
+    private:
+      SILType *getTypeStart() const {
+          return reinterpret_cast<SILType *>(this + 1);
+      }
+    };
+
+    template <unsigned NumElts>
+    class ValueBundle : public ValueBundleImpl,
+        protected llvm::TrailingObjects<SILType, Operand *> {
+    public:
+        ValueBundle() : NumElements(NumElts) {}
+    };
+
+    class TrivialValueBundle : ValueBundle<1> {
+      SILType getType() const {
+          return getTypeStart()[0];
+      }
+
+      use_iterator use_begin() const {
+        return use_iterator(opBegin);
+      }
+      
+      use_iterator use_end() const {
+        return use_iterator(nullptr);
+      }
+      
+      iterator_range<use_iterator> getUses() const {
+          return {use_begin(), use_end()};
+      }
+    };
+
+A few things to notice:
+
+1. We explicitly differentiate in the class hierarchy in between the case of
+having a TrivialValueBundle and a NonTrivialValueBundle. We make it easy to go
+from ValueBundle to TrivialValueBundle by using the familiar getAs pattern to
+make it easy to test. Thus when before one would perform:
+
+    for (auto *Use : V->getUses()) {
+      ...
+    }
+
+Instead one performs:
+
+    if (auto *TrivialVB = V->getValues()->getAsTrivial()) {
+      for (auto *Use : TrivialVB->getUses()) {
+        ...
+      }
+    }
+
+If one does not care about whether or not one has a trivial value bundle, there
+is a convenience API for retrieving all uses from all operand lists:
+
+    for (auto *Use : V->getAllUses()) {
+      ...
+    }
+
+Now our SIL hierarchy looks as follows:
+
+    INSERT GRAPHIC HERE
+
+The final change that needs to be made is to separate the notion of Def from
+SILInstruction. We do this by changing SILInstruction to no longer inherit from
+`ValueDef`. Thus `SILInstruction` in of itself . We then introduce a subclass of `SILInstruction` called
+`DefSILInstruction` that is defined as:
+
+    class DefSILInstruction : public SILInstruction, ValueDef {
+      
+    };
+
+Every ValueBundle is at least trivial, so we always have one FirstTy,
+FirstUseList stored inline. The rest of the types/uselists are allocated in a
+trailing objects array.
+
+1. Clarifying that a `ValueBase` is not a value (and thus can not have
+   ownership) and renaming `ValueBase` to `ValueDef`. For the rest of the
+   document we use `ValueDef` instead of `ValueBase`.
+2. Introducing the `ValueBundle` as the group of values that are defined by a
+   `ValueDef`. A `ValueBundle` is just a group of values and is not a value
+   itself.
+3. Explicitly defining a `SILValue` as a sub-element of a `ValueBundle` with an
+   ownership kind.
+4. Introducing a new subclass 
+
 -->
