@@ -88,13 +88,10 @@ existing test cases.
 ## Defs and Values
 
 In order to model that values, not defs, have ownership, we separate the
-`SILValue` and `ValueBase` APIs.
-
-First we rename `ValueBase` to `ValueDef`. This makes it clear from a naming
-perspective that a `ValueDef` is not a value, but the def of a value.
-
-Then we eliminate eliminate all operator methods on `SILValue` that allow one to
-work with a `SILValue` as a `ValueDef` directly,
+`SILValue` and `ValueBase` APIs. First we rename `ValueBase` to `ValueDef`. This
+makes it clear from a naming perspective that a `ValueDef` is not a value, but
+the def of a value. Then we eliminate eliminate all operator methods on
+`SILValue` that allow one to work with a `SILValue` as a `ValueDef` directly.
 
     class SILValue {
       ...
