@@ -63,40 +63,99 @@ edges. This is accomplished by:
 All values in SIL are defined via an assignment statement of the form: `<foo> = <bar>`.
 In English, we say `foo` is a value that is defined by the def
 `bar`. Originally, these two concepts were distinct concepts represented by the
-`SILValue` and `ValueBase` classes. All `ValueBase` produced a list of
-`SILValues` that from were related, but not equivalent to the defining `ValueBase`. With
-the decision to represent multiple return values as instruction projections
-instead of as a list of `SILValue`, this distinction in between a def and the
-values was lost, resulting in `SILValue` being used interchangeably with
-`ValueBase`. This exposes several representation issues when one attempts to add
-ownership to SIL:
+classes `SILValue` and `ValueBase`. All `ValueBase` defined a list of `SILValue`
+that were related, but not equivalent to the defining `ValueBase`. With the
+decision to represent multiple return values as instruction projections instead
+of as a list of `SILValue`, this distinction in between a def and the values was
+lost, resulting in `SILValue` being used interchangeably with `ValueBase`
+throughout the swift codebase. This exposes several representation issues when
+one attempts to add ownership to SIL:
 
 1. Values have ownership, while the defs that define the values do not. This
-   implies that defs and values *should not* be interchangeable. Thus we must
-   modify the APIs that relate `ValueBase` and `SILValue` to enforce this
-   separation.
-2. Multiple return values via projections can not be represented in SIL. This is
-   necessary for allowing for an efficient destructure take operation. This
-   suggests that we must introduce a special form of value that is used to
-   produce multiple `SILValue` from a singular `ValueBase`.
+   implies that defs and values *should not* be interchangeable.
+2. The plan to use projections for multiple return values was never implemented
+   since at the time there was no compelling need. This lack of implementation
+   is an issue for representing ownership in SIL since a destructure take
+   operation is needed to efficiently forward subparts of aggregates.
 
 We propose below a series of transformation to SIL that resolves these
 issues. **NOTE** A condition of this proposed transformation is that today's
 textual SIL (ignoring additive changes below) should stay completely
-unchanged. This is important to ensure that we do not need to update many test
-cases.
+unchanged. This is important to ensure that we do not need to update already
+existing test cases.
 
 ## Defs and Values
 
-The first change that we make is renaming `ValueBase` to `ValueDef`. This makes
-it clear from a naming perspective that a `ValueDef` is not a value, but the def
-of a value. Then in order to force the APIs that relate `SILValue` to no longer
-be freely convertible to `ValueDef`'s, we:
+In order to model that values, not defs, have ownership, we separate the
+`SILValue` and `ValueBase` APIs.
 
-1. Remove all operator methods on `SILValue` that allow one to retrieve a
-   `SILValue`'s `ValueDef` in favor of the new method `ValueDef
-   *SILValue::getDef() const`. This ensures that it is easy to visually
-   recognize call sites where a `SILValue`'s `ValueDef` is being retrieved.
+First we rename `ValueBase` to `ValueDef`. This makes it clear from a naming
+perspective that a `ValueDef` is not a value, but the def of a value.
+
+Then we eliminate eliminate all operator methods on `SILValue` that allow one to
+work with a `SILValue` as a `ValueDef` directly,
+
+    class SILValue {
+      ...
+      ValueDef *operator->() const;
+      ValueDef &operator*() const;
+      operator ValueDef *() const;
+    
+      bool operator==(ValueDef *RHS) const;
+      bool operator!=(ValueDef *RHS) const;
+      ...
+    };
+
+Instead, we provide an explicit named method:
+
+    ValueDef *SILValue::getDef() const
+
+This will eliminate code like the following where a SILValue is implicitly used
+as a def,
+
+    SILValue V;
+    ValueDef *Def;
+    
+    if (V != Def) { ... }
+    if (V->getParentBlock()) { ... }
+
+In favor of the clearer:
+
+    SILValue V;
+    ValueDef *Def;
+    
+    if (V.getDef() != Def) { ... }
+    if (V.getDef()->getParentBlock()) { ... }
+
+Notice how now it is explicit in the code that we are not working with the
+properties of V, but rather with V's def.
+
+In cases like the above, we want the verbosity to yield clarity. In other cases,
+this makes certain very convenient APIs more difficult to use. The main example
+here are the `isa` and `dyn_cast` APIs. We introduce helper functions that give
+the same convenience as before but added clarity by making it clear that we are
+not performing an isa query on the value, but instead the underlying def of the
+value. Consider the following code using the old API,
+
+    SILValue V;
+    
+    if (isa<ApplyInst>(V)) { ... }
+    if (auto *PAI = dyn_cast<PartialApplyInst>(V)) { ... }
+
+Notice how it seems like one is casting the SILValue as if it is a
+ValueBase. This is due to the implicit conversion from a SILValue to its
+internal ValueBase. In comparison the new API makes it absolutely clear that one
+is casting the underlying def of the SILValue:
+
+    SILValue V;
+    
+    if (def_isa<ApplyInst>(V)) { ... }
+    if (auto *PAI = def_dyn_cast<PartialApplyInst>(V)) { ... }
+
+Thus the convenience of the old API is maintained, clarity is improved, and the
+conceptual API boundary is enforced.
+
+The final change that we make is that we eliminate 
 2. Make the constructor `SILValue(ValueDef *)` private and via declaring
    `ValueDef` subclasses as friend classes, introduce a new API
    `ValueDef::getValue()` that constructs a `SILValue` from a specific
