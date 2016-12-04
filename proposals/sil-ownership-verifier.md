@@ -10,13 +10,21 @@ categories: proposals
 **Table of Contents**
 
 - [Summary](#summary)
-- [ValueBase and ValueOwnershipKind](#valuebase-and-valueownershipkind)
+- [Clarifying Values and Defs](#clarifying-values-and-defs)
+    - [SILNode and ValueDef](#silnode-and-valuedef)
+    - [ValueBundle](#valuebundle)
+- [ValueOwnershipKind](#valueownershipkind)
 - [Verification of Ownership Semantics](#verification-of-ownership-semantics)
     - [Use Verification](#use-verification)
     - [Dataflow Verification](#dataflow-verification)
 - [Appendix](#appendix)
     - [Full Code For Initialization of Worklist](#full-code-for-initialization-of-worklist)
     - [Full Code For Worklist Algorithm](#full-code-for-worklist-algorithm)
+- [Implementation](#implementation)
+    - [`ValueDef::getOwnershipKind()`](#valuedefgetownershipkind)
+- [Mapping ValueDef to ValueOwnershipKind](#mapping-valuedef-to-valueownershipkind)
+- [Proving Def-Use Convention Correctness](#proving-def-use-convention-correctness)
+- [Identifying Ownership Dataflow Errors](#identifying-ownership-dataflow-errors)
 
 <!-- markdown-toc end -->
 
@@ -29,13 +37,206 @@ ownership model constraints.
 The SIL ownership model embeds ownership into SIL's SSA def-use edges. This is
 accomplished by:
 
-1. Specifying a bottom pseudo-lattice of ownership kinds and specifying a method
-   for mapping a `ValueBase` to a lattice element.
-2. Using a verifier to ensure that all `SILInstructions` are compatible with the
-   ownership kind propagated by the def `ValueBase` and that pseudo-linear
+1. Clarifying the relationship in between Values and Defs at the SIL level and
+   separating `SILValue` and `ValueBase` from an API perspective by introducing
+   the notion of a `ValueBundle`. This includes renaming `ValueBase` to
+   `ValueDef`.
+2. Specifying a set of ownership kinds and specifying a method for mapping a
+   `SILValue` to an ownership kind.
+3. Specifying constraints on all `SILInstruction`s that constrain what ownership
+   kinds their operands can have.
+4. Implementing a verifier to ensure that all `SILInstructions` are compatible
+   with the ownership kind propagated by the `ValueDef` and that pseudo-linear
    dataflow constraints are maintained.
 
-# ValueBase and ValueOwnershipKind
+# Clarifying Values and Defs
+
+Today, `ValueBase` represents both a Value and a Def. This can be seen since
+`SILValue` is essentially a wrapper around `ValueBase` that does not provide any
+real utility. This creates the following representational issues:
+
+1. Defs (e.g. `SILInstruction`) do not inherently have ownership. The
+`SILValue`s that are the result of a def are what have ownership. This is a
+modeling issue.
+2. Certain SILIns
+produced by `SILInstructioare not distinguished from values (e.g. `SILValue`)
+of themselves do not have ownership. Rather the `SILValue` produced by the
+`SILInstruction` are what have ownership. 
+
+We propose below a series of transformation to SIL that resolves these
+issues. **NOTE** A condition of this proposed transformation is that today's
+textual SIL (ignoring additive changes below) should stay completely
+unchanged. This is important to ensure that we do not need to update many test
+cases. As a quick review, the current class hierarchy rooted at ValueBase is as
+follows:
+
+    INSERT GRAPHIC HERE
+
+## SILNode and ValueDef
+
+The first change that we propose is splitting ValueBase into two different
+classes: SILNode and ValueDef. SILNode will stay at the top of the class
+hierarchy. A SILNode will only contain its ValueKind and will effectively act as
+a work around for c++ not being able to put methods on enums (that is in Swift,
+we would merge ValueKind and SILNode). A ValueDef will have the use-list and
+type that used to be in ValueBase and a type. Of course a ValueDef is a
+SILNode. Thus we have transformed our class hierarchy as follows:
+
+    INSERT GRAPHIC HERE
+
+## ValueBundle
+
+Given this hierarchy, we are still treating `ValueDef` as a value and a def. To
+eliminate this, we introduce the `ValueBundle`. A `ValueBundle` is conceptually
+a "bundle of values" that is represented by an SSA value. Its sub-elements can
+only be extracted by an as yet to be implemented `bundle_extract`
+instruction. In the trivial case (i.e. a unary result), we do not represent the
+`ValueBundle` and `bundle_extract` explicitly. This ensures that the current IR
+we print today is invariant. But in the case of a `ValueBundle` with multiple
+elements, we require that:
+
+1. The `ValueBundle` SSA value is only used by `bundle_extract` instructions.
+2. Each "sub-element" of the `ValueBundle` is taken by a `bundle_extract`
+instruction exactly once along all paths through the program.
+
+This enables `ValueBundles` to be used with `bundle_extract`s to represent
+multiple return values.
+
+Given that a `ValueBundle` is what a `ValueDef` defines, we make `ValueBundle` a
+field on `ValueDef`:
+
+    class ValueDef {
+      ...
+      ValueBundle Bundle;
+    
+    public:
+      ValueBundle *getValues() const;
+      ...
+    }
+
+Given that `ValueBundle` is now on `ValueDef` and it contains the bundle of
+values defined by `ValueDef`, we remove the `SILType` and use-list field in
+`ValueDef` and move those into `ValueBundle`. Thus we define the `ValueBundle`
+API as follows:
+
+    class ValueBundleImpl {
+      Operand *opBegin;
+      Operand *opEnd;
+
+    public:
+      ArrayRef<SILType> getTypes() const {
+        return {getTypeStart(), getNumElements()};
+      }
+
+      using UseListTy =
+        ArrayRefView<std::function<iterator_range<use_iterator> (Operand *)>>;
+      UseListTy getUseLists() const {
+        return make_arrayrefview(ArrayRef<Operand>(opBegin, opEnd),
+            [](Operand *Op) -> iterator_range<use_iterator> {
+              return {use_iterator(Op), use_iterator(nullptr)};
+            });
+        return {opBegin, getNumElements()};
+      }
+
+      unsigned getNumElements() const { return opEnd - opBegin; }
+
+      TrivialValueBundle *getAsTrivial() const {
+        if (getNumElements() != 1)
+          return nullptr;
+        return reinterpret_cast<TrivialValueBundle *>(this);
+      }
+
+      /// Return a range that acts as a flatmap of other ranges.
+      flatmap_range<UseListTy> getAllUses() const {
+        return make_flatmap_range(getUseLists());
+      }
+
+    private:
+      SILType *getTypeStart() const {
+          return reinterpret_cast<SILType *>(this + 1);
+      }
+    };
+
+    template <unsigned NumElts>
+    class ValueBundle : public ValueBundleImpl,
+        protected llvm::TrailingObjects<SILType, Operand *> {
+    public:
+        ValueBundle() : NumElements(NumElts) {}
+    };
+
+    class TrivialValueBundle : ValueBundle<1> {
+      SILType getType() const {
+          return getTypeStart()[0];
+      }
+
+      use_iterator use_begin() const {
+        return use_iterator(opBegin);
+      }
+      
+      use_iterator use_end() const {
+        return use_iterator(nullptr);
+      }
+      
+      iterator_range<use_iterator> getUses() const {
+          return {use_begin(), use_end()};
+      }
+    };
+
+A few things to notice:
+
+1. We explicitly differentiate in the class hierarchy in between the case of
+having a TrivialValueBundle and a NonTrivialValueBundle. We make it easy to go
+from ValueBundle to TrivialValueBundle by using the familiar getAs pattern to
+make it easy to test. Thus when before one would perform:
+
+    for (auto *Use : V->getUses()) {
+      ...
+    }
+
+Instead one performs:
+
+    if (auto *TrivialVB = V->getValues()->getAsTrivial()) {
+      for (auto *Use : TrivialVB->getUses()) {
+        ...
+      }
+    }
+
+If one does not care about whether or not one has a trivial value bundle, there
+is a convenience API for retrieving all uses from all operand lists:
+
+    for (auto *Use : V->getAllUses()) {
+      ...
+    }
+
+Now our SIL hierarchy looks as follows:
+
+    INSERT GRAPHIC HERE
+
+The final change that needs to be made is to separate the notion of Def from
+SILInstruction. We do this by changing SILInstruction to no longer inherit from
+`ValueDef`. Thus `SILInstruction` in of itself . We then introduce a subclass of `SILInstruction` called
+`DefSILInstruction` that is defined as:
+
+    class DefSILInstruction : public SILInstruction, ValueDef {
+      
+    };
+
+Every ValueBundle is at least trivial, so we always have one FirstTy,
+FirstUseList stored inline. The rest of the types/uselists are allocated in a
+trailing objects array.
+
+1. Clarifying that a `ValueBase` is not a value (and thus can not have
+   ownership) and renaming `ValueBase` to `ValueDef`. For the rest of the
+   document we use `ValueDef` instead of `ValueBase`.
+2. Introducing the `ValueBundle` as the group of values that are defined by a
+   `ValueDef`. A `ValueBundle` is just a group of values and is not a value
+   itself.
+3. Explicitly defining a `SILValue` as a sub-element of a `ValueBundle` with an
+   ownership kind.
+4. Introducing a new subclass 
+
+
+# ValueOwnershipKind
 
 Define `ValueOwnershipKind` as the enum with the following cases:
 
@@ -44,66 +245,46 @@ Define `ValueOwnershipKind` as the enum with the following cases:
       Unowned,
       Owned,
       Guaranteed,
-      Any,
-      Invalid
     }
 
-These cases are the elements of our lattice. The ownership kinds that correspond
-to well known ownership kinds, we do not describe. But there are two cases that
-are new: `Any` and `Invalid`. We define these as follows:
-
-* `Any`. `⊤` of the lattice. A def that can be paired with a use accepting any
-ownership kind. This is needed for SILUndef. A use that accepts `Any` ownership
-kind is able to be paired with a def with any ownership kind. This is needed for
-instructions like `copy_value`. `Any` is the `top` element of the lattice.
-* `Invalid`. `⊥` of the lattice. This is only produced when attempting to
-intersect lattice elements that are incompatible with each other.
-
-Our bottom pseudo-lattice has an intersection operator defined via the following
-operation table (with `*` meaning `Invalid`):
-
-| | `Trivial` | `Unowned` | `Owned` | `Guaranteed` | `InOut` | `Any`        | `Invalid` |
-|:--------------:|-----------|-----------|---------|--------------|---------|--------------|-----------|
-| **`Trivial`**    | `Trivial` | `*`       | `*`     | `*`          | `*`     | `Trivial`    | `*`       |
-| **`Unowned`**    | `*`       | `Unowned` | `*`     | `*`          | `*`     | `Unowned`    | `*`       |
-| **`Owned`**      | `*`       | `*`       | `Owned` | `*`          | `*`     | `Owned`      | `*`       |
-| **`Guaranteed`** | `*`       | `*`       | `*`     | `Guaranteed` | `*`     | `Guaranteed` | `*`       |
-| **`InOut`**      | `*`       | `*`       | `*`     | `*`          | `InOut` | `InOut`      | `*`       |
-| **`Any`**        | `Trivial` | `Unowned` | `Owned` | `Guaranteed` | `InOut` | `Any`        | `*`       |
-| **`Invalid`**    | `*`       | `*`       | `*`     | `*`          | `*`     | `*`          | `*`       |
-
-This chart is implemented by the function `ValueOwnershipKindMerge`:
-
-    ValueOwnershipKind ValueOwnershipKindMerge(ValueOwnershipKind LHS, ValueOwnershipKind RHS);
-
-Using this API, we can merge together multiple ValueOwnershipKind and compare
-against `ValueOwnershipKind::Invalid` to determine compatibility.
-
-Our approach to mapping a `ValueBase` to a `ValueOwnershipKind` is to use a
+Our approach to mapping a `SILValue` to a `ValueOwnershipKind` is to use a
 `SILVisitor` called `ValueOwnershipKindVisitor`. This works well since if one
-holds `ValueKind` constant, `ValueBase` have well defined ownership
+holds `ValueKind` constant, `SILValue` have well defined ownership
 constraints. Thus we can handle each case individually via the visitor. We use
 SILNodes.def to ensure that all `ValueKind` have a defined visitor method. This
 will ensure that when a new `ValueKind` is added, the compiler will emit a
 warning that the visitor must be updated, ensuring correctness.
 
 The visitor will be hidden in a *.cpp file and will expose its output via a new
-API on `ValueBase` :
+API on `SILValue` :
 
-    ValueOwnershipKind ValueBase::getOwnershipKind() const;
+    ValueOwnershipKind SILValue::getOwnershipKind() const;
 
-Since the implementation of `ValueBase::getOwnershipKind()` will be out of line,
+Since the implementation of `SILValue::getOwnershipKind()` will be out of line,
 none of the visitor code will be exposed to the rest of the compiler.
+
+In order to determine if a `SILInstruction`'s operands are SILValue that have
+compatible ownership with a `SILInstruction`, we introduce a new API on
+`SILInstruction` that returns the ownership constraint of the `i`th operand of
+the `SILInstruction`:
+
+    Optional<ValueOwnershipKind> SILInstruction::getOwnershipConstraint(unsigned i) const;
+
+Specifically, it returns `.Some(OwnershipKind)` if there is a constraint or
+`.None` if the `SILInstruction` will accept any ValueOwnershipKind
+(e.g. `copy_value`). This API is sufficient since there are no `SILInstructions`
+that accept only a subset of `ValueOwnershipKind`, all either accept a singular
+ownership kind or all ownership kinds.
 
 # Verification of Ownership Semantics
 
 Since our ownership model is based around SSA form, all verification of
-ownership only need consider an individual def (`ValueBase`) and the uses of the
+ownership only need consider an individual value (`SILValue`) and the uses of the
 def (`SILInstruction`). Thus for each def/use-set, we:
 
 1. **Verify Use Semantics**: All uses must be compatible with the def's
    `ValueOwnershipKind`.
-2. **Dataflow Verification**: Given any path P in the program and a `ValueBase`
+2. **Dataflow Verification**: Given any path P in the program and a `ValueDef`
    `V` along that path:
    a. There exists only one <a href="#footnote-0-lifetime-ending-use">"lifetime ending"</a> use of `V` along that path.
    b. After the lifetime ending use of `V`, there are no non-lifetime ending
@@ -115,12 +296,12 @@ dataflow verification.
 
 ## Use Verification
 
-Just like with `ValueBase`, individual `SILInstruction` kind's have well-defined
+Just like with `ValueDef`, individual `SILInstruction` kind's have well-defined
 ownership semantics implying that we can use a `SILVisitor` approach here as
 well. Thus we define a `SILVisitor` called
 `OwnershipCompatibilityUseChecker`. This checker works by taking in a
-`ValueBase` and visiting all of the `SILInstruction` users of the
-ValueBase. Each visitor method returns a pair of booleans, the first stating
+`ValueDef` and visiting all of the `SILInstruction` users of the
+ValueDef. Each visitor method returns a pair of booleans, the first stating
 whether or not the ownership values were compatible and the second stating
 whether or not this specific use should be considered a "lifetime ending"
 use. The checker then stores the lifetime ending uses and non-lifetime ending
@@ -128,7 +309,7 @@ uses in two separate arrays for processing by the dataflow verifier.
 
 ## Dataflow Verification
 
-The dataflow verifier takes in as inputs the `ValueBase` (i.e. def) and lists of
+The dataflow verifier takes in as inputs the `ValueDef` (i.e. def) and lists of
 lifetime-ending and non-lifetime ending uses. Since we are using SSA form, we
 already know that our def must dominate all of our uses implying that a use can
 never overconsume due to a def not being along a path. On the other hand, we
@@ -422,29 +603,29 @@ longer allowed to be used in any way, e.g. `destroy_value`, `end_borrow`.
 
 # Implementation
 
-## `ValueBase::getOwnershipKind()`
+## `ValueDef::getOwnershipKind()`
 
-Now that we have defined intersection, we categorize all ValueBase into sets
-depending on the ValueBase's result ownership properties (if a result
+Now that we have defined intersection, we categorize all ValueDef into sets
+depending on the ValueDef's result ownership properties (if a result
 exists). These categories are:
 
-1. **No Result**. A ValueBase without a result.
-2. **Constant Ownership**. A ValueBase with a result that always produces the same
+1. **No Result**. A ValueDef without a result.
+2. **Constant Ownership**. A ValueDef with a result that always produces the same
    ownership kind.
-3. **Forwarding Ownership**. A ValueBase that is an Instruction whose result is
+3. **Forwarding Ownership**. A ValueDef that is an Instruction whose result is
    always equivalent to the same ownership kind as one of the instruction's operands.
 4. **Special Ownership**. An instruction with special rules for propagating
-   ownership. This includes ValueBase such as ApplyInst, SILArgument, and
+   ownership. This includes ValueDef such as ApplyInst, SILArgument, and
    TryApply.
 
 Using these categories, we then define:
 
-`ValueOwnershipKind ValueBase::getOwnershipKind() const`
+`ValueOwnershipKind ValueDef::getOwnershipKind() const`
 
 This is done by 
-Using these categories, we implement a method on `ValueBase` called
-`ValueBase::getOwnershipKind()`. This will be implemented using a visitor to
-ensure that warnings are provided when engineers add new `ValueBase` so that
+Using these categories, we implement a method on `ValueDef` called
+`ValueDef::getOwnershipKind()`. This will be implemented using a visitor to
+ensure that warnings are provided when engineers add new `ValueDef` so that
 keeping the ownership code up to date will be easy.
 
      /// The ownership semantics of a def-use edge.
@@ -486,7 +667,7 @@ keeping the ownership code up to date will be easy.
 
 1. Defining an enum called `ValueOwnershipKind` that specifies possible
 ownership along a def-use edge.
-2. Implementing the API `ValueOwnershipKind ValueBase::getOwnershipKind() const`
+2. Implementing the API `ValueOwnershipKind ValueDef::getOwnershipKind() const`
 to vend these values.
 3. Implementing the API `void SILInstruction::verifyOperandOwnership() const`
 that verifies that a `SILInstruction`'s operands have ownership that is
@@ -500,7 +681,7 @@ Define `ValueOwnershipKind` as follows:
 
 
 
-# Mapping ValueBase to ValueOwnershipKind
+# Mapping ValueDef to ValueOwnershipKind
 
 # Proving Def-Use Convention Correctness
 
