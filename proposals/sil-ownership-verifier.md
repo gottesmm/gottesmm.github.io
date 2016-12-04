@@ -39,7 +39,7 @@ edges. This is accomplished by:
 
 1. Eliminating ownership representation issues in SIL. This implies:
    
-   a. Formalizing into SIL API's the difference in between defs
+   a. Formalizing into SIL API's the distinction in between defs
    (e.g. `SILInstruction`) and the values produced by defs
    (e.g. `SILValue`). This is needed to model values as having ownership and
    defs as not having ownership. The main implication here is that the two can
@@ -62,7 +62,7 @@ edges. This is accomplished by:
 
 All values in SIL are defined via an assignment statement of the form: `<foo> = <bar>`.
 In English, we say `foo` is a value that is defined by the def
-`bar`. Originally, these two concepts were distinct concepts represented by the
+`bar`. Originally, these two concepts were distinctly represented by the
 classes `SILValue` and `ValueBase`. All `ValueBase` defined a list of `SILValue`
 that were related, but not equivalent to the defining `ValueBase`. With the
 decision to represent multiple return values as instruction projections instead
@@ -74,9 +74,10 @@ one attempts to add ownership to SIL:
 1. Values have ownership, while the defs that define the values do not. This
    implies that defs and values *should not* be interchangeable.
 2. The plan to use projections for multiple return values was never implemented
-   since at the time there was no compelling need. This lack of implementation
-   is an issue for representing ownership in SIL since a destructure take
-   operation is needed to efficiently forward subparts of aggregates.
+   since at the time there was no compelling need. This capability is needed to
+   efficiently implement any SIL ownership model since some form of multiple
+   return values is needed to be able to represent a destructure take of an
+   aggregate given that we never allow an SSA value to be partially alive.
 
 We propose below a series of transformation to SIL that resolves these
 issues. **NOTE** A condition of this proposed transformation is that today's
