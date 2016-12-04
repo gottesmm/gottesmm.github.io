@@ -66,8 +66,8 @@ operator-> and implicit conversions. This has worked ok until now, but
 implementing an ownership model at the SIL level exposes several representation
 issues with this model:
 
-1. Defs (e.x. `SILInstruction`) do not have ownership. The value
-   (e.x. `SILValue`) that is defined by a def is what has ownership
+1. Defs (e.g. `SILInstruction`) do not have ownership. The value
+   (e.g. `SILValue`) that is defined by a def is what has ownership
    properties. This suggests that from an API perspective, we must drive an
    explicit wedge in between `ValueBase` and `SILValue` by eliminating any
    ability to implicitly convert in between the without the usage of a named
