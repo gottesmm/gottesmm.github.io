@@ -1,6 +1,6 @@
 ---
 layout: proposal
-title: SIL Ownership Verification
+title: SIL Ownership Model
 categories: proposals
 ---
 
@@ -30,48 +30,50 @@ categories: proposals
 
 # Summary
 
-This document defines a SIL ownership model and a verifier for the model. This
-will allow for static compile time verification that a SIL program satisfies all
-ownership model constraints.
+This document defines a SIL ownership model and a compile time static verifier
+for the model. This will allow for static compile time verification that a SIL
+program satisfies all ownership model constraints.
 
-The SIL ownership model embeds ownership into SIL's SSA def-use edges. This is
-accomplished by:
+The proposed SIL ownership model embeds ownership into SIL's SSA def-use
+edges. This is accomplished by:
 
-1. Clarifying the relationship in between Values and Defs at the SIL level and
-   separating `SILValue` and `ValueBase` from an API perspective by introducing
-   the notion of a `ValueBundle`. This includes renaming `ValueBase` to
-   `ValueDef`.
+1. Eliminating ownership representation issues in SIL. This implies:
+   
+   a. Formalizing into SIL API's the difference in between defs
+   (e.g. `SILInstruction`) and the values produced by defs
+   (e.g. `SILValue`). This is needed to model values as having ownership and
+   defs as not having ownership. The main implication here is that the two can
+   no longer be implicitly convertable and the API must enforce this.
+
+   b. Introducing a new value called a `ValueBundle` that enables multiple
+   return values to be implemented using projection operations.
+
 2. Specifying a set of ownership kinds and specifying a method for mapping a
    `SILValue` to an ownership kind.
+
 3. Specifying constraints on all `SILInstruction`s that constrain what ownership
    kinds their operands can have.
+
 4. Implementing a verifier to ensure that all `SILInstructions` are compatible
    with the ownership kind propagated by the `ValueDef` and that pseudo-linear
    dataflow constraints are maintained.
 
-# Modeling Values and Defs
+# Eliminating Ownership Representation Issues in SIL
 
-All values in SIL are defined via an assignment statement like the following:
+All values in SIL are defined via an assignment statement like: `<foo> = <bar>`.
+In English, we say `foo` is a value that is defined by the def `bar`. Originally
+in SIL, these two concepts were distinct concepts represented by the `SILValue`
+and `ValueBase` classes. All `ValueBase` produced a list of `SILValue`s that
+from were related, but not equivalent to the `ValueBase`. With the decision to
+represent multiple return values as instruction projections instead of as a list
+of `SILValue`, this distinction in between a def and the values was lost,
+resulting in `SILValue` being used interchangeably with `ValueBase`. This
+exposes several representation issues when one attempts to add ownership to SIL:
 
-    <foo> = <bar>
-
-In SIL, we call `foo` a value that is produced by the def `bar`. Originally in
-SIL, these two concepts were represented by the `SILValue` and `ValueBase`
-classes. All `ValueBase` produced a list of `SILValue`s conceptually distinct
-from the `ValueBase`. With the decision to represent multiple return values as
-instruction projections instead of as a list of `SILValue`, this distinction in
-between a def and the values was lost, resulting in `SILValue` being used
-interchangeably with `ValueBase` throughout the compiler via the usage of
-operator-> and implicit conversions. This has worked ok until now, but
-implementing an ownership model at the SIL level exposes several representation
-issues with this model:
-
-1. Defs (e.g. `SILInstruction`) do not have ownership. The value
-   (e.g. `SILValue`) that is defined by a def is what has ownership
-   properties. This suggests that from an API perspective, we must drive an
-   explicit wedge in between `ValueBase` and `SILValue` by eliminating any
-   ability to implicitly convert in between the without the usage of a named
-   method.
+1. Values have ownership, while the defs that define the values do not. This
+   implies that defs and values *should not* be interchangeable. Thus we must
+   modify the APIs that relate `ValueBase` and `SILValue` to enforce this
+   separation.
 2. Multiple return values via projections can not be represented in SIL. This is
    necessary for allowing for an efficient destructure take operation. This
    suggests that we must introduce a special form of value that is used to
@@ -81,33 +83,38 @@ We propose below a series of transformation to SIL that resolves these
 issues. **NOTE** A condition of this proposed transformation is that today's
 textual SIL (ignoring additive changes below) should stay completely
 unchanged. This is important to ensure that we do not need to update many test
-cases. As a quick review, the current class hierarchy rooted at ValueBase is as
-follows:
+cases.
 
-    INSERT GRAPHIC HERE
+## Defs and Values
 
-## SILNode and ValueDef
+The first change that we make is renaming `ValueBase` to `ValueDef`. This makes
+it clear from a naming perspective that a `ValueDef` is not a value, but the def
+of a value. Then in order to force the APIs that relate `SILValue` to no longer
+be freely convertible to `ValueDef`'s, we:
 
-The first change that we propose is splitting ValueBase into two different
-classes: SILNode and ValueDef. SILNode will stay at the top of the class
-hierarchy. A SILNode will only contain its ValueKind and will effectively act as
-a work around for c++ not being able to put methods on enums (that is in Swift,
-we would merge ValueKind and SILNode). A ValueDef will have the use-list and
-type that used to be in ValueBase and a type. Of course a ValueDef is a
-SILNode. Thus we have transformed our class hierarchy as follows:
+1. Remove all operator methods on `SILValue` that allow one to retrieve a
+   `SILValue`'s `ValueDef` in favor of the new method `ValueDef
+   *SILValue::getDef() const`. This ensures that it is easy to visually
+   recognize call sites where a `SILValue`'s `ValueDef` is being retrieved.
+2. Make the constructor `SILValue(ValueDef *)` private and via declaring
+   `ValueDef` subclasses as friend classes, introduce a new API
+   `ValueDef::getValue()` that constructs a `SILValue` from a specific
+   `ValueDef`. This makes conceptual sense since a `SILValue` is defined by a
+   `ValueDef` implying a `ValueDef` should also vend those `SILValue`s.
 
-    INSERT GRAPHIC HERE
+## Multiple Return Values
 
-## ValueBundle
+Now that we have separated the APIs that relate `SILValue` and `ValueDef`
+cleanly. (TODO Maybe say match the model?), we need to consider how to represent
+multiple return values. Since a key 
 
-Given this hierarchy, we are still treating `ValueDef` as a value and a def. To
-eliminate this, we introduce the `ValueBundle`. A `ValueBundle` is conceptually
-a "bundle of values" that is represented by an SSA value. Its sub-elements can
-only be extracted by an as yet to be implemented `bundle_extract`
-instruction. In the trivial case (i.e. a unary result), we do not represent the
-`ValueBundle` and `bundle_extract` explicitly. This ensures that the current IR
-we print today is invariant. But in the case of a `ValueBundle` with multiple
-elements, we require that:
+introduce the `ValueBundle`. A
+`ValueBundle` is conceptually a "bundle of values" that is represented by an SSA
+value. Its sub-elements can only be extracted by an as yet to be implemented
+`bundle_extract` instruction. In the trivial case (i.e. a unary result), we do
+not represent the `ValueBundle` and `bundle_extract` explicitly. This ensures
+that the current IR we print today is invariant. But in the case of a
+`ValueBundle` with multiple elements, we require that:
 
 1. The `ValueBundle` SSA value is only used by `bundle_extract` instructions.
 2. Each "sub-element" of the `ValueBundle` is taken by a `bundle_extract`
