@@ -18,13 +18,9 @@ categories: proposals
     - [Use Verification](#use-verification)
     - [Dataflow Verification](#dataflow-verification)
 - [Appendix](#appendix)
+    - [Changes to SILValue API for SIL Ownership](#changes-to-silvalue-api-for-sil-ownership)
     - [Full Code For Initialization of Worklist](#full-code-for-initialization-of-worklist)
     - [Full Code For Worklist Algorithm](#full-code-for-worklist-algorithm)
-- [Implementation](#implementation)
-    - [`ValueDef::getOwnershipKind()`](#valuedefgetownershipkind)
-- [Mapping ValueDef to ValueOwnershipKind](#mapping-valuedef-to-valueownershipkind)
-- [Proving Def-Use Convention Correctness](#proving-def-use-convention-correctness)
-- [Identifying Ownership Dataflow Errors](#identifying-ownership-dataflow-errors)
 
 <!-- markdown-toc end -->
 
@@ -37,24 +33,19 @@ program satisfies all ownership model constraints.
 The proposed SIL ownership model embeds ownership into SIL's SSA def-use
 edges. This is accomplished by:
 
-1. Eliminating ownership representation issues in SIL. This implies:
-   
-   a. Formalizing into SIL API's the distinction in between defs
+1. Eliminating ownership representation issues in SIL. This implies: 
+   * Formalizing into SIL API's the distinction in between defs
    (e.g. `SILInstruction`) and the values produced by defs
    (e.g. `SILValue`). This is needed to model values as having ownership and
    defs as not having ownership. The main implication here is that the two can
    no longer be implicitly convertible and the API must enforce this.
-
-   b. Introducing a new value called a `ValueBundle` that enables multiple
+   * Introducing a new value called a `ValueBundle` that enables multiple
    return values to be implemented using projection operations.
-
 2. Specifying a set of ownership kinds and specifying a method for mapping a
    `SILValue` to an ownership kind.
-
 3. Specifying ownership constraints on all `SILInstruction`s and `SILArgument`s
    that constrain what ownership kinds their operands and incoming values
    respectively can possess.
-
 4. Implementing a verifier to ensure that all `SILInstructions` are compatible
    with the ownership kind propagated by the `ValueDef` and that pseudo-linear
    dataflow constraints are maintained.
@@ -89,90 +80,17 @@ existing test cases.
 ## Defs and Values
 
 In order to model that values, not defs, have ownership, we separate the
-`SILValue` and `ValueBase` APIs. First we rename `ValueBase` to `ValueDef`. This
-makes it clear from a naming perspective that a `ValueDef` is not a value, but
-the def of a value. Then we eliminate eliminate all operator methods on
-`SILValue` that allow one to work with a `SILValue` as a `ValueDef`
-directly:
+`SILValue` and `ValueBase` APIs. This is done by:
 
-    class SILValue {
-      ...
-      ValueDef *operator->() const; // deleted
-      ValueDef &operator*() const; // deleted
-      operator ValueDef *() const; // deleted
+1. Renaming `ValueBase` to `ValueDef`. This makes it clear from a naming
+perspective that a `ValueDef` is not a value, but the def of a value.
+2. Eliminate all operator methods on `SILValue` that allow one to work with the
+`ValueDef` API via a `SILValue` in favor of an explicit method for getting the
+internal `ValueDef` of a `SILValue`.
+3. 
 
-      bool operator==(ValueDef *RHS) const; // deleted
-      bool operator!=(ValueDef *RHS) const; // deleted
-      ...
-    };
-
-Instead, we provide an explicit, named method to retrieve a `SILValue`'s def:
-
-    class SILValue {
-      ...
-      ValueDef *SILValue::getDef() const; // new
-      ...
-    };
-
-This eliminates the following form of code where a `SILValue` is implicitly used
-as a `ValueBase`:
-
-    SILValue V;
-    ValueDef *Def;
-    
-    if (V != Def) { ... }
-    if (V->getParentBlock()) { ... }
-
-In favor of the explicit:
-
-    SILValue V;
-    ValueDef *Def;
-    
-    if (V.getDef() != Def) { ... }
-    if (V.getDef()->getParentBlock()) { ... }
-
-In cases like the above, we want the to increase clarity through the usage of
-verbosity. In other cases, this verboseness makes convenient APIs more difficult
-to use. The main example here are the `isa` and `dyn_cast` APIs. We introduce
-two helper functions that give the same convenience as before but added clarity by
-making it clear that we are not performing an isa query on the value, but
-instead the underlying def of the value:
-
-    template <typename ParentTy>
-    bool def_isa(SILValue V) { return isa<ParentTy>(V.getDef()); }
-    template <typename ParentTy>
-    ParentTy *def_dyn_cast(SILValue V) { return dyn_cast<ParentTy>(V.getDef()); }
-
-Consider the following code using the old API,
-
-    SILValue V;
-    
-    if (isa<ApplyInst>(V)) { ... }
-    if (auto *PAI = dyn_cast<PartialApplyInst>(V)) { ... }
-
-Notice how it seems like one is casting the SILValue as if it is a
-ValueBase. This is due to the misleading usage of the implicit conversion from a
-`SILValue` to the `SILValue`'s internal `ValueBase`. In comparison the new API
-makes it absolutely clear that one is reasoning about the ValueKind of the
-underlying def of the `SILValue`:
-
-    SILValue V;
-    
-    if (def_isa<ApplyInst>(V)) { ... }
-    if (auto *PAI = def_dyn_cast<PartialApplyInst>(V)) { ... }
-
-Thus the convenience of the old API is maintained, clarity is improved, and the
-conceptual API boundary is enforced.
-
-The final change that we propose is eliminating the ability to construct a
-`SILValue` from a `ValueDef` externally to the `ValueDef` itself. Allowing this
-to occur violates the modeling notion that a `SILValue` is defined and thus is
-dependent on the `ValueDef`. To implement this, we propose changing the
-constructor `SILValue::SILValue(ValueDef *)` to have private instead of public
-access control and declaring `ValueDef` subclasses as friends of
-`SILValue`. This then allows the `ValueDef` to vend opaquely constructed
-`SILValue`, but disallows external users of the API from directly creating
-`SILValue` from `ValueDef`, enforcing the value/def distinction in our model.
+For specifics on the proposed changes to SILValue's API, see
+the [appendix](#changes-to-silvalue-api-for-sil-ownership).
 
 ## Multiple Return Values
 
@@ -445,12 +363,12 @@ exhausted, we know that:
 
 Thus we assert that both sets are empty and error accordingly.
 
-   if (!SuccessorBlocksThatMustBeVisited.empty()) {
-     leak_error(); // ERROR!
-   }
-   if (!BlocksWithNonLifetimeEndingUses.empty()) {
-     use_after_free_error(); // ERROR!
-   }
+    if (!SuccessorBlocksThatMustBeVisited.empty()) {
+      leak_error(); // ERROR!
+    }
+    if (!BlocksWithNonLifetimeEndingUses.empty()) {
+      use_after_free_error(); // ERROR!
+    }
 
 The full code is in the appendix.
 
@@ -458,6 +376,89 @@ The full code is in the appendix.
 longer allowed to be used in any way, e.g. `destroy_value`, `end_borrow`.
 
 # Appendix
+
+## Changes to SILValue API for SIL Ownership
+
+We eliminate the following APIs:
+
+    class SILValue {
+      ...
+      ValueDef *operator->() const; // deleted
+      ValueDef &operator*() const; // deleted
+      operator ValueDef *() const; // deleted
+
+      bool operator==(ValueDef *RHS) const; // deleted
+      bool operator!=(ValueDef *RHS) const; // deleted
+      ...
+    };
+
+Instead, we provide an explicit, named method to retrieve a `SILValue`'s def:
+
+    class SILValue {
+      ...
+      ValueDef *SILValue::getDef() const; // new
+      ...
+    };
+
+This eliminates the following form of code where a `SILValue` is implicitly used
+as a `ValueBase`:
+
+    SILValue V;
+    ValueDef *Def;
+    
+    if (V != Def) { ... }
+    if (V->getParentBlock()) { ... }
+
+In favor of the explicit:
+
+    SILValue V;
+    ValueDef *Def;
+    
+    if (V.getDef() != Def) { ... }
+    if (V.getDef()->getParentBlock()) { ... }
+
+In cases like the above, we want the to increase clarity through the usage of
+verbosity. In other cases, this verboseness makes convenient APIs more difficult
+to use. The main example here are the `isa` and `dyn_cast` APIs. We introduce
+two helper functions that give the same convenience as before but added clarity by
+making it clear that we are not performing an isa query on the value, but
+instead the underlying def of the value:
+
+    template <typename ParentTy>
+    bool def_isa(SILValue V) { return isa<ParentTy>(V.getDef()); }
+    template <typename ParentTy>
+    ParentTy *def_dyn_cast(SILValue V) { return dyn_cast<ParentTy>(V.getDef()); }
+
+Consider the following code using the old API,
+
+    SILValue V;
+    
+    if (isa<ApplyInst>(V)) { ... }
+    if (auto *PAI = dyn_cast<PartialApplyInst>(V)) { ... }
+
+Notice how it seems like one is casting the SILValue as if it is a
+ValueBase. This is due to the misleading usage of the implicit conversion from a
+`SILValue` to the `SILValue`'s internal `ValueBase`. In comparison the new API
+makes it absolutely clear that one is reasoning about the ValueKind of the
+underlying def of the `SILValue`:
+
+    SILValue V;
+    
+    if (def_isa<ApplyInst>(V)) { ... }
+    if (auto *PAI = def_dyn_cast<PartialApplyInst>(V)) { ... }
+
+Thus the convenience of the old API is maintained, clarity is improved, and the
+conceptual API boundary is enforced.
+
+The final change that we propose is eliminating the ability to construct a
+`SILValue` from a `ValueDef` externally to the `ValueDef` itself. Allowing this
+to occur violates the modeling notion that a `SILValue` is defined and thus is
+dependent on the `ValueDef`. To implement this, we propose changing the
+constructor `SILValue::SILValue(ValueDef *)` to have private instead of public
+access control and declaring `ValueDef` subclasses as friends of
+`SILValue`. This then allows the `ValueDef` to vend opaquely constructed
+`SILValue`, but disallows external users of the API from directly creating
+`SILValue` from `ValueDef`, enforcing the value/def distinction in our model.
 
 ## Full Code For Initialization of Worklist
 
