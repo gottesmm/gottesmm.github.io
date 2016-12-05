@@ -87,7 +87,8 @@ perspective that a `ValueDef` is not a value, but the def of a value.
 2. Eliminate all operator methods on `SILValue` that allow one to work with the
 `ValueDef` API via a `SILValue` in favor of an explicit method for getting the
 internal `ValueDef` of a `SILValue`.
-3. 
+3. Use private access control and friend classes to only allow for `SILValue`s
+   to be constructed and vended by their defining `ValueDef`.
 
 For specifics on the proposed changes to SILValue's API, see
 the [appendix](#changes-to-silvalue-api-for-sil-ownership).
