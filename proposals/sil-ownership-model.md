@@ -189,7 +189,7 @@ ownership semantics implying that we can use a `SILVisitor` approach here as
 well. Thus we define a `SILVisitor` called
 `OwnershipCompatibilityUseChecker`. This checker works by taking in a
 `ValueDef` and visiting all of the `SILInstruction` users of the
-ValueDef. Each visitor method returns a pair of booleans, the first stating
+`ValueDef`. Each visitor method returns a pair of booleans, the first stating
 whether or not the ownership values were compatible and the second stating
 whether or not this specific use should be considered a "lifetime ending"
 use. The checker then stores the lifetime ending uses and non-lifetime ending
@@ -289,7 +289,12 @@ access control and declaring `ValueDef` subclasses as friends of
 `SILValue`, but disallows external users of the API from directly creating
 `SILValue` from `ValueDef`, enforcing the value/def distinction in our model.
 
-## SIL Argument Terminator Convention Examples
+## SILArgument/Terminator OwnershipConvention Examples
+
+We present here several examples of how ownership conventions look on
+SILArguments and terminators.
+
+First we present a simple branch and return example.
 
     class C { ... }
 
@@ -302,6 +307,30 @@ access control and declaring `ValueDef` subclasses as friends of
       %2 = copy_value %0 : $C
       return %2 : @owned $C
     }
+
+Now consider this loop example:
+
+    sil @loop : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
+    bb0(%0 : @owned $Optional<Builtin.NativeObject>):
+      br bb1(%0 : @owned $Builtin.NativeObject)
+
+    bb1(%1 : @owned $Builtin.NativeObject):
+      %2 = alloc_object $C
+      strong_release %1 : $Builtin.NativeObject
+      %3 = unchecked_ref_cast %2 : $C to $Builtin.NativeObject
+      cond_br %cond, bb1(%3 : @owned Builtin.NativeObject), bb2
+
+    bb2:
+      strong_release %3 : $Builtin.NativeObject
+      %result = tuple()
+      return %result : @trivial $()
+    }
+
+Note how it is absolutely clear what convention is being used when passing a
+value to the phi node. No dataflow reasoning is required implying we can do a
+simple pass over the CFG to prove correctness.
+
+Now consider two examples of switches:
 
     sil @owned_switch_enum : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
     bb0(%0 : @owned $Optional<Builtin.NativeObject>):
@@ -338,21 +367,8 @@ access control and declaring `ValueDef` subclasses as friends of
       return %result : @trivial $()
     }
 
-    sil @loop : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
-    bb0(%0 : @owned $Optional<Builtin.NativeObject>):
-      br bb1(%0 : @owned $Builtin.NativeObject)
-
-    bb1(%1 : @owned $Builtin.NativeObject):
-      %2 = alloc_object $C
-      strong_release %1 : $Builtin.NativeObject
-      %3 = unchecked_ref_cast %2 : $C to $Builtin.NativeObject
-      cond_br %cond, bb1(%3 : @owned Builtin.NativeObject), bb2
-
-    bb2:
-      strong_release %3 : $Builtin.NativeObject
-      %result = tuple()
-      return %result : @trivial $()
-    }
+Notice how the lifetime is completely explicit in both cases, so the optimizer
+can not treat the conversion of switch_enum from +1 to +0 implicitly.
 
 ## Full Dataflow Verification Algorithm
 
@@ -374,8 +390,9 @@ Define the following book keeping data structures.
     // A list of successor blocks that we must visit by the time the algorithm terminates.
     llvm::SmallPtrSet<SILBasicBlock *, 8> SuccessorBlocksThatMustBeVisited;
 
-Then for each non-lifetime ending use, we add the block and its instruction to
-the `BlocksWithNonLifetimeEndingUses`. There is a possibility of having multiple
+Then for each non-lifetime ending use (found by the
+`OwnershipCompatibilityUseChecker`), we add the block and its instruction to the
+`BlocksWithNonLifetimeEndingUses`. There is a possibility of having multiple
 non-lifetime ending uses in the same block, in such a case, we always take the
 later value since we are performing a liveness-esque dataflow:
 
