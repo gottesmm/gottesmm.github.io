@@ -154,7 +154,15 @@ the convention of a `SILArgument` in a loop. Additionally, it allows for greater
 readability in the IR and prevents the optimizer from performing implicit
 conversions of ownership semantics on branch instructions, for instance,
 converting a `switch_enum` from consuming a value at +1 to using a borrowed +0
-parameter. In terms of API, we introduce a new 
+parameter. In terms of API, we introduce a new method on `SILArgument`:
+
+    ValueOwnershipKind SILArgument::getOwnershipConstraint() const;
+
+which returns the required ownership constraint. In terms of representing these
+ownership constraint conventions in textual SIL, we print out the ownership
+constraint next to the specific argument in the block and the specific argument
+in the given terminator. For details of how this will look with various
+terminators, see the [appendix](#sil-argument-terminator-convention-examples).
 
 # Verification of Ownership Semantics
 
@@ -280,6 +288,71 @@ access control and declaring `ValueDef` subclasses as friends of
 `SILValue`. This then allows the `ValueDef` to vend opaquely constructed
 `SILValue`, but disallows external users of the API from directly creating
 `SILValue` from `ValueDef`, enforcing the value/def distinction in our model.
+
+## SIL Argument Terminator Convention Examples
+
+    class C { ... }
+
+    sil @simple_branching : $@convention(thin) : @convention(thin) (@owned Builtin.NativeObject, @guaranteed C) -> @owned C {
+    bb0(%0 : @owned $Builtin.NativeObject, %1 : @guaranteed $C):
+      br bb1(%0 : @owned $Builtin.NativeObject)
+    
+    bb1(%1 : @owned $Builtin.NativeObject):
+      strong_release %1 : $Builtin.NativeObject
+      %2 = copy_value %0 : $C
+      return %2 : @owned $C
+    }
+
+    sil @owned_switch_enum : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
+    bb0(%0 : @owned $Optional<Builtin.NativeObject>):
+      switch_enum %0 : @owned $Builtin.NativeObject, #Optional.none.enumelt: bb1, #Optional.some.enumelt.1: bb2
+    
+    bb1:
+      br bb3
+    
+    bb2(%1 : @owned $Builtin.NativeObject):
+      strong_release %1 : $Builtin.NativeObject
+      br bb3
+
+    bb3:
+      %result = tuple()
+      return %result : @trivial $()
+    }
+
+    sil @guaranted_converted_switch_enum : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
+    bb0(%0 : @owned $Optional<Builtin.NativeObject>):
+      %1 = begin_borrow %0 : $Optional<Builtin.NativeObject>
+      switch_enum %1 : @guaranteed $Builtin.NativeObject, #Optional.none.enumelt: bb1, #Optional.some.enumelt.1: bb2
+    
+    bb1:
+      br bb3
+
+    bb2(%2 : @guaranteed $Builtin.NativeObject):
+      %3 = function_ref @g_user : $@convention(thin) (@guaranteed Builtin.NativeObject) -> ()
+      apply %3(%2) : $@convention(thin) (@guaranteed Builtin.NativeObject) -> ()
+      br bb3
+
+    bb3:
+      end_borrow %1 from %0 : $Optional<Builtin.NativeObject>, $Optional<Builtin.NativeObject>
+      %result = tuple()
+      return %result : @trivial $()
+    }
+
+    sil @loop : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
+    bb0(%0 : @owned $Optional<Builtin.NativeObject>):
+      br bb1(%0 : @owned $Builtin.NativeObject)
+    
+    bb1(%1 : @owned $Builtin.NativeObject):
+      %2 = alloc_object $C
+      strong_release %1 : $Builtin.NativeObject
+      %3 = unchecked_ref_cast %2 : $C to $Builtin.NativeObject
+      cond_br %cond, bb1(%3 : @owned Builtin.NativeObject), bb2
+    
+    bb2:
+      strong_release %3 : $Builtin.NativeObject
+      %result = tuple()
+      return %result : @trivial $()
+    }
 
 ## Full Dataflow Verification Algorithm
 
