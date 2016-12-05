@@ -479,12 +479,9 @@ We begin our worklist algorithm by popping off the next element in the worklist.
       ...
     }
 
-We only visit blocks at most once, so we first check if this is a block that we
-have already visited. If we have, continue there is no further work to do.
-
-    if (!VisitedBlocks.insert(BB).second) {
-      continue;
-    }
+Since every time we insert objects into the worklist, we first try to insert it
+into the `VisitedBlock` list, we do not need to check if `BB` has been visited
+yet, since elements can not be added to the worklist twice.
 
 Then make sure that BB is not in `BlocksWithLifetimeEndingUses`. If BB is in
 `BlocksWithLifetimeEndingUses`, then we know that there is a path going through
@@ -524,10 +521,11 @@ that there is a leak.
     }
 
 Finally add all predecessors of BB that we have not visited yet to the Worklist
-for processing:
+for processing. We use insert here to ensure that we only ever add a
+VisitedBlock once to the Worklist:
 
     for (const SILBasicBlock *PredBlock : BB->getPredecessorBlocks()) {
-      if (VisitedBlocks.count(PredBlock))
+      if (!VisitedBlocks.insert(PredBlock).second)
         continue;
       Worklist.push_back(PredBlock);
     }
@@ -594,11 +592,6 @@ The full code:
       // Grab the next block to visit.
       const SILBasicBlock *BB = Worklist.pop_back_val();
 
-      // If we already visited the block, then there is no further work to do.
-      if (!VisitedBlocks.insert(BB).second) {
-        continue;
-      }
-
       // Then check that BB is not a lifetime-ending use block. If it is error,
       // since we have an overconsume.
       if (BlocksWithLifetimeEndingUses.count(BB)) {
@@ -634,7 +627,9 @@ The full code:
       // Finally add all predecessors of BB that have not been visited yet to
       // the worklist.
       for (const SILBasicBlock *PredBlock : BB->getPredecessorBlocks()) {
-        if (VisitedBlocks.count(PredBlock))
+        // Try to insert the PredBlock into the VisitedBlocks list to ensure
+        // that we only ever add a block once to the worklist.
+        if (!VisitedBlocks.insert(PredBlock).second)
           continue;
         Worklist.push_back(PredBlock);
       }
