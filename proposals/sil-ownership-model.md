@@ -74,7 +74,7 @@ internal `ValueDef` of a `SILValue`, i.e.:
           ValueDef *operator->() const; // deleted
           ValueDef &operator*() const; // deleted
           operator ValueDef *() const; // deleted
-    
+
           bool operator==(ValueDef *RHS) const; // deleted
           bool operator!=(ValueDef *RHS) const; // deleted
           ...
@@ -234,7 +234,7 @@ via a `SILValue` are as follows:
 
     SILValue V;
     ValueDef *Def;
-    
+
     if (V != Def) { ... }
     if (V->getParentBlock()) { ... }
 
@@ -242,7 +242,7 @@ Our change, causes these code patterns to be rewritten in favor of the explicit:
 
     SILValue V;
     ValueDef *Def;
-    
+
     if (V.getDef() != Def) { ... }
     if (V.getDef()->getParentBlock()) { ... }
 
@@ -261,7 +261,7 @@ instead the underlying def of the value:
 Consider the following code using the old API,
 
     SILValue V;
-    
+
     if (isa<ApplyInst>(V)) { ... }
     if (auto *PAI = dyn_cast<PartialApplyInst>(V)) { ... }
 
@@ -272,7 +272,7 @@ makes it absolutely clear that one is reasoning about the ValueKind of the
 underlying def of the `SILValue`:
 
     SILValue V;
-    
+
     if (def_isa<ApplyInst>(V)) { ... }
     if (auto *PAI = def_dyn_cast<PartialApplyInst>(V)) { ... }
 
@@ -296,7 +296,7 @@ access control and declaring `ValueDef` subclasses as friends of
     sil @simple_branching : $@convention(thin) : @convention(thin) (@owned Builtin.NativeObject, @guaranteed C) -> @owned C {
     bb0(%0 : @owned $Builtin.NativeObject, %1 : @guaranteed $C):
       br bb1(%0 : @owned $Builtin.NativeObject)
-    
+
     bb1(%1 : @owned $Builtin.NativeObject):
       strong_release %1 : $Builtin.NativeObject
       %2 = copy_value %0 : $C
@@ -306,10 +306,10 @@ access control and declaring `ValueDef` subclasses as friends of
     sil @owned_switch_enum : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
     bb0(%0 : @owned $Optional<Builtin.NativeObject>):
       switch_enum %0 : @owned $Builtin.NativeObject, #Optional.none.enumelt: bb1, #Optional.some.enumelt.1: bb2
-    
+
     bb1:
       br bb3
-    
+
     bb2(%1 : @owned $Builtin.NativeObject):
       strong_release %1 : $Builtin.NativeObject
       br bb3
@@ -323,7 +323,7 @@ access control and declaring `ValueDef` subclasses as friends of
     bb0(%0 : @owned $Optional<Builtin.NativeObject>):
       %1 = begin_borrow %0 : $Optional<Builtin.NativeObject>
       switch_enum %1 : @guaranteed $Builtin.NativeObject, #Optional.none.enumelt: bb1, #Optional.some.enumelt.1: bb2
-    
+
     bb1:
       br bb3
 
@@ -341,13 +341,13 @@ access control and declaring `ValueDef` subclasses as friends of
     sil @loop : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
     bb0(%0 : @owned $Optional<Builtin.NativeObject>):
       br bb1(%0 : @owned $Builtin.NativeObject)
-    
+
     bb1(%1 : @owned $Builtin.NativeObject):
       %2 = alloc_object $C
       strong_release %1 : $Builtin.NativeObject
       %3 = unchecked_ref_cast %2 : $C to $Builtin.NativeObject
       cond_br %cond, bb1(%3 : @owned Builtin.NativeObject), bb2
-    
+
     bb2:
       strong_release %3 : $Builtin.NativeObject
       %result = tuple()
@@ -360,17 +360,17 @@ Define the following book keeping data structures.
 
     // The worklist that we will use for our iterative reachability query.
     llvm::SmallVector<SILBasicBlock *, 32> Worklist;
- 
+
     // The set of blocks with lifetime ending uses.
     llvm::SmallPtrSet<SILBasicBlock *, 8> BlocksWithLifetimeEndingUses;
- 
+
     // The set of blocks with non-lifetime ending uses and the associated
     // non-lifetime ending use SILInstruction.
     llvm::SmallDenseMap<SILBasicBlock *, SILInstruction *, 8> BlocksWithNonLifetimeEndingUses;
 
     // The blocks that we have already visited.
     llvm::SmallPtrSet<SILBasicBlock *, 32> VisitedBlocks;
- 
+
     // A list of successor blocks that we must visit by the time the algorithm terminates.
     llvm::SmallPtrSet<SILBasicBlock *, 8> SuccessorBlocksThatMustBeVisited;
 
@@ -424,7 +424,7 @@ Then we check if we previously saw any non-lifetime ending uses in
 `UserParentBlock` by checking the map `BlocksWithNonLifetimeEndingUses`. If we do
 find any such uses, we check if the lifetime ending use is earlier in the block
 that the non-lifetime ending use. If so then (2) is violated and we
-error. Once we know that (2) has not been violated, we remove 
+error. Once we know that (2) has not been violated, we remove
 
     auto Iter = BlocksWithNonLifetimeEndUses.find(UserParentBlock);
     if (Iter != BlocksWithNonLifetimeEndUses.end()) {
@@ -500,7 +500,7 @@ that there is a leak.
       // we already visited the successor.
       if (VisitedBlocks.count(SuccBlock))
         continue;
-          
+
       // Otherwise, add the successor to our MustVisitBlocks set to ensure that
       // we assert if we do not visit it by the end of the algorithm.
       SuccessorBlocksThatMustBeVisited.insert(SuccBlock);
@@ -538,17 +538,17 @@ The full code:
 
     // The worklist that we will use for our iterative reachability query.
     llvm::SmallVector<SILBasicBlock *, 32> Worklist;
- 
+
     // The set of blocks with lifetime ending uses.
     llvm::SmallPtrSet<SILBasicBlock *, 8> BlocksWithLifetimeEndingUses;
- 
+
     // The set of blocks with non-lifetime ending uses and the associated
     // non-lifetime ending use SILInstruction.
     llvm::SmallDenseMap<SILBasicBlock *, SILInstruction *, 8> BlocksWithNonLifetimeEndingUses;
 
     // The blocks that we have already visited.
     llvm::SmallPtrSet<SILBasicBlock *, 32> VisitedBlocks;
- 
+
     // A list of successor blocks that we must visit by the time the algorithm terminates.
     llvm::SmallPtrSet<SILBasicBlock *, 8> SuccessorBlocksThatMustBeVisited;
 
@@ -608,7 +608,7 @@ The full code:
         // we already visited the successor.
         if (VisitedBlocks.count(SuccBlock))
           continue;
-            
+
         // Otherwise, add the successor to our MustVisitBlocks set to ensure that
         // we assert if we do not visit it by the end of the algorithm.
         SuccessorBlocksThatMustBeVisited.insert(SuccBlock);
