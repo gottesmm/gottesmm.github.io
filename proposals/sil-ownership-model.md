@@ -64,7 +64,7 @@ In order to model that values, not defs, have ownership, we separate the
 `SILValue` and `ValueBase` APIs. This is done by:
 
 1. Renaming `ValueBase` to `ValueDef`. This makes it clear from a naming
-perspective that a `ValueDef` is not a value, but the def of a value.
+perspective that a `ValueDef` is not a value, but may define values.
 2. Eliminate all operator methods on `SILValue` that allow one to work with the
 `ValueDef` API via a `SILValue` in favor of an explicit method for getting the
 internal `ValueDef` of a `SILValue`, i.e.:
@@ -184,20 +184,20 @@ dataflow verification.
 
 ## Use Verification
 
-Just like with `ValueDef`, individual `SILInstruction` kind's have well-defined
+Just like with `SILValue`, individual `SILInstruction` kind's have well-defined
 ownership semantics implying that we can use a `SILVisitor` approach here as
 well. Thus we define a `SILVisitor` called
-`OwnershipCompatibilityUseChecker`. This checker works by taking in a
-`ValueDef` and visiting all of the `SILInstruction` users of the
-`ValueDef`. Each visitor method returns a pair of booleans, the first stating
-whether or not the ownership values were compatible and the second stating
-whether or not this specific use should be considered a "lifetime ending"
-use. The checker then stores the lifetime ending uses and non-lifetime ending
-uses in two separate arrays for processing by the dataflow verifier.
+`OwnershipCompatibilityUseChecker`. This checker works by taking in a `SILValue`
+and visiting all of the `SILInstruction` users of the `SILValue`. Each visitor
+method returns a pair of booleans, the first stating whether or not the
+ownership values were compatible and the second stating whether or not this
+specific use should be considered a "lifetime ending" use. The checker then
+stores the lifetime ending uses and non-lifetime ending uses in two separate
+arrays for processing by the dataflow verifier.
 
 ## Dataflow Verification
 
-The dataflow verifier takes in as inputs the `ValueDef` (i.e. def) and lists of
+The dataflow verifier takes in as inputs the `SILValue` (i.e. def) and lists of
 lifetime-ending and non-lifetime ending uses. Since we are using SSA form, we
 already know that our def must dominate all of our uses implying that a use can
 never overconsume due to a def not being along a path. On the other hand, we
