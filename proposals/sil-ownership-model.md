@@ -197,7 +197,7 @@ arrays for processing by the dataflow verifier.
 
 ## Dataflow Verification
 
-The dataflow verifier takes in as inputs the `SILValue` (i.e. def) and lists of
+The dataflow verifier takes in as inputs the `SILValue` and lists of
 lifetime-ending and non-lifetime ending uses. Since we are using SSA form, we
 already know that our def must dominate all of our uses implying that a use can
 never overconsume due to a def not being along a path. On the other hand, we
