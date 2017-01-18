@@ -4,6 +4,101 @@ title: SIL Multiple Return Values
 categories: proposals
 ---
 
+We currently have two kinds of def: instructions and arguments.  Arguments
+always define a single value, and I don't see anything in your proposal that
+changes that.  And the idea that an instruction produces exactly one value is
+already problematic, because many don't produce a meaningful value at all.
+All that changes in your proposal is that certain instructions need to be able
+to produce multiple values.
+
+Moreover, the word "def" clearly suggests that it refers to the definition of a
+value that can be used, and that's how the term is employed basically everywhere.
+
+So allow me to suggest that a much clearer way of saying what you're trying to
+say is that we need to distinguish between defs and instructions.  An instruction
+may have an arbitrary number of defs, possibly zero, and each def is a value
+that can be used.  (But the number of defs per instruction is known statically
+for most instructions, which is something we can use to make working with
+defs much less annoying.)
+
+Also this stuff you're saying about values having ownership and defs not having
+ownership is, let's say, misleading; it only works if you're using a meaninglessly
+broad definition of ownership.  It would be better to simply say that the verification
+we want to do for ownership strongly encourages us to allow instructions to 
+introduce multiple defs whose properties can be verified independently.
+
+2. Specifying a set of ownership kinds and specifying a method for mapping a
+   `SILValue` to an ownership kind.
+3. Specifying ownership constraints on all `SILInstruction`s and `SILArgument`s
+   that constrain what ownership kinds their operands and incoming values
+   respectively can possess.
+4. Implementing a verifier to ensure that all `SILInstruction` and `SILArgument`
+   are compatible with the ownership kind propagated by their operand
+   `SILValue`s and that pseudo-linear dataflow constraints are maintained.
+
+I'll tackle these other sections in another email.  Let's go one at a time.
+
+# Cleanly separating Value and Def APIs in SIL
+
+All values in SIL are defined via an assignment statement of the form: `<foo> = <bar>`.
+In English, we say `foo` is a value that is defined by the def
+`bar`. Originally, these two concepts were distinctly represented by the classes
+`SILValue` and `ValueBase`. All `ValueBase` defined a list of `SILValue` that
+were related, but not equivalent to the defining `ValueBase`. With the decision
+to represent multiple return values as instruction projections instead of as a
+list of `SILValue`, this distinction in between a def and the values was lost,
+resulting in `SILValue` being used interchangeably with `ValueBase` throughout
+the swift codebase. This exposes a modeling issue when one attempts to add
+ownership to SIL, namely that values have ownership, while the defs that define
+the values do not. This implies that defs and values *should not* be
+interchangeable.
+
+Again, I do not understand what you're trying to say about ownership here.
+Just drop it.
+
+In order to model that values, not defs, have ownership, we separate the
+`SILValue` and `ValueBase` APIs. This is done by:
+
+Almost all of this is based on what I consider to be a really unfortunate use
+of the term "def".
+
+Allow me to suggest this:
+
+1. You do not need to rename ValueBase.  Let's stick with the term "Value"
+instead of "Def" in the source code.
+
+2. There are only three subclasses of ValueBase for now:
+  - SILArgument
+  - SingleInstructionResult
+  - MultiInstructionResult
+This means that the Kind can probably be packed into the use-list pointer.
+
+3. SingleInstructionResult will only be used for instructions that are known to
+produce exactly one value.  All such instructions can derive from a single
+class, of which SingleInstructionResult can be a superclass.  This will make
+it possible to construct a SILValue directly from such instructions, as well as
+making it easy to support dyn_casting back to such instructions.
+
+4. MultiInstructionResult will have to store the result index as well as provide
+some way to get back to the instruction.  I think the most efficient representation
+here is to store an array of MultiInstructionResults immediately *before* the
+address point of the instruction, in reverse order, so that (this + ResultIndex + 1)
+gets you back to the instruction.  This also makes it possible to efficiently index
+into the results without loading the number of results (except for the
+bounds-checking assert, of course).
+
+It will not be possible to construct a SILValue directly from one of these instructions;
+you'll have to ask the instruction for its Nth result.
+
+It's not clear to me what dyn_casting a SILValue back to a multi-result instruction
+should do.  I guess it succeeds and then you just ask the instruction which
+result you had.
+
+5. SILInstruction has an accessor to return what's basically an ArrayRef of
+its instruction results.  It's not quite an ArrayRef because that would require
+type-punning, but you can make it work as efficiently as one.
+
+---
 
 ## Multiple Return Value Implementation
 
