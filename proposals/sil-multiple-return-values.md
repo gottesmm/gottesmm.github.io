@@ -4,6 +4,32 @@ title: SIL Multiple Return Values
 categories: proposals
 ---
 
+# Introduction
+
+This document is a proposal to re-add multiple return values to SIL. The reason
+why this is being proposed is to enable for a destructure operation to be
+implemented in SIL. The structure of this document is as follows:
+
+1. Background and Justification.
+2. Design
+
+# Background and Justification
+
+SIL originally had multiple return values. These were removed in the past year
+since the APIs that were used to manipulate return values were difficult to use
+and a small compile time benefit was realized. The difficulty of these APIs
+being yielded were rooted in the APIs for manipulating single value instructions
+and multiple value instructions were not separated at the API level. This led to
+groups of bugs where a compiler writer was trying to only handle single result
+instructions but did not realize that he/she needed to also handle multiple
+value instructions. These bugs resulted in various proposals for removing the
+ability to make this mistake by changing the relevant APIs. At the time there
+was no program in Swift that could not be expressed efficienctly in terms of a
+SIL program that only used single return values. Thus multiple return values
+were removed. Semantic SIL has changed this computation.
+
+Today, SIL is being changed to 
+
 We currently have two kinds of def: instructions and arguments.  Arguments
 always define a single value, and I don't see anything in your proposal that
 changes that.  And the idea that an instruction produces exactly one value is
@@ -99,6 +125,8 @@ its instruction results.  It's not quite an ArrayRef because that would require
 type-punning, but you can make it work as efficiently as one.
 
 ---
+
+<!--
 
 ## Multiple Return Value Implementation
 
@@ -279,3 +307,4 @@ since that will be the majority of the cases that are visited, while the more
 complicated case of having a non-trivial ValueBundle still has a constant amount
 of work and does not involve performing a scalability hurting linear search or
 bisection along the operand list.
+-->
