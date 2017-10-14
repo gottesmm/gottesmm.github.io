@@ -1,5 +1,5 @@
 ---
-layout: proposal
+layout: default
 title: Topological ARC Optimization (Mathy Version)
 categories: proposals
 ---

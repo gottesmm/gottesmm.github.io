@@ -1,5 +1,5 @@
 ---
-layout: proposal
+layout: default
 title: SIL Multiple Return Values
 categories: proposals
 ---

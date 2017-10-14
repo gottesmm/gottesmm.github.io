@@ -1,5 +1,5 @@
 ---
-layout: proposal
+layout: default
 title: The Program Path Topology
 categories: proposals
 ---
