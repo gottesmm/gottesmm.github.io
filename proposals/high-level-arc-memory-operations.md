@@ -4,8 +4,6 @@ title: High Level ARC Memory Operations
 categories: proposals
 ---
 
-# {{ page.title }}
-
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-generate-toc again -->
 **Table of Contents**
 
@@ -31,7 +29,7 @@ categories: proposals
 
 <!-- markdown-toc end -->
 
-# Summary
+## Summary
 
 This document proposes:
 
@@ -53,9 +51,9 @@ This will allow for:
    unowned` ownership semantics. This will be enforced via the verifier.
 3. more aggressive ARC code motion.
 
-# Definitions
+## Definitions
 
-## ownership qualified load
+### ownership qualified load
 
 We propose three different ownership qualifiers for load. Define `load [trivial]`
 as:
@@ -88,7 +86,7 @@ Then define `load [take]` as:
 owns the result object (i.e. a take is a move). Loading from the memory location
 again without reinitialization is illegal.
 
-## load_borrow and end_borrow
+### load_borrow and end_borrow
 
 Next we provide `load_borrow` and `end_borrow`:
 
@@ -124,7 +122,7 @@ ensure that LLVM does not move any uses of `%x` past the `fixLifetime`
 instruction of `%x_ptr` once we begin creating such instructions as a result of
 ARC optimization.
 
-## ownership qualified store
+### ownership qualified store
 
 First define a `store [trivial]` as:
 
@@ -155,9 +153,9 @@ previous value in the memory location:
 
     store %new_x to %x_ptr : $*C
 
-# Implementation
+## Implementation
 
-## Goals
+### Goals
 
 Our implementation strategy goals are:
 
@@ -168,7 +166,7 @@ Our implementation strategy goals are:
 Goal 2 will be implemented via a pass that transforms ownership qualified
 `load`/`store` instructions into unqualified `load`/`store` right after SILGen.
 
-## Plan
+### Plan
 
 We begin by adding initial infrastructure for our development. This means:
 
@@ -254,7 +252,7 @@ to be true by default. After a cooling off period, we move all of the code
 behind the SILOwnershipModel flag in front of the flag. We do this so we can
 reuse that flag for further SILOwnershipModel changes.
 
-## Optimizer Changes
+### Optimizer Changes
 
 Since the SILOwnershipModel eliminator will eliminate the ownership qualifiers
 on load, store instructions right after ownership verification, there will be no
@@ -272,7 +270,7 @@ forwarding, dead stores, ARC optimization. In all of these cases, the necessary
 changes are relatively trivial to respond to. We give a quick taste of two of
 them: store->load forwarding and ARC Code Motion.
 
-### store->load forwarding
+#### store->load forwarding
 
 Currently we perform store->load forwarding as follows:
 
@@ -304,7 +302,7 @@ any loss of generality, lets consider solely `store`.
     strong_retain %x
     use(%x)
 
-### ARC Code Motion
+#### ARC Code Motion
 
 If ARC Code Motion wishes to move the ARC semantics of ownership qualified
 `load`, `store` instructions, it must now consider read/write effects. On the
@@ -313,7 +311,7 @@ qualified loads and stores in the face of deinits. This is because we no longer
 need to worry about our code motion causing a deinit to fire in between (without
 any loss of generality) the load/retain.
 
-### Normal Code Motion
+#### Normal Code Motion
 
 Normal code motion will lose some effectiveness since many of the load/store
 operations that it used to be able to move now must consider ARC information. We
@@ -321,7 +319,7 @@ may need to consider running ARC code motion earlier in the pipeline where we
 normally run Normal Code Motion to ensure that we are able to handle these
 cases.
 
-### ARC Optimization
+#### ARC Optimization
 
 The main implication for ARC optimization is that instead of eliminating just
 retains, releases, it must be able to recognize ownership qualified `load`,
@@ -329,7 +327,7 @@ retains, releases, it must be able to recognize ownership qualified `load`,
 memory behavior will need to recognize the `end_borrow` instruction as a code
 motion barrier.
 
-### Function Signature Optimization
+#### Function Signature Optimization
 
 Semantic ARC affects function signature optimization in the context of the owned
 to borrow optimization. Specifically:
@@ -342,9 +340,9 @@ to borrow optimization. Specifically:
    `load_borrow`. This would require the addition of a new `@borrow` return
    value convention.
 
-# Appendix
+## Appendix
 
-## Partial Initialization of Loadable References in SIL
+### Partial Initialization of Loadable References in SIL
 
 In SIL, a value of non-trivial loadable type is loaded from a memory location as
 follows:
@@ -369,9 +367,9 @@ load, store instructions eliminate this problem.
 **NOTE** Without any loss of generality, we will speak of values with reference
 semantics instead of non-trivial values.
 
-## Case Study: Partial Initialization and load [copy]
+### Case Study: Partial Initialization and load [copy]
 
-### The Problem
+#### The Problem
 
 Consider the following swift program:
 
@@ -634,7 +632,7 @@ performed even after code motion causes our SIL to look as follows:
 
 Giving us the exact result that we want: Operation Sequence 2!
 
-### Defining load [copy]
+#### Defining load [copy]
 
 Given that we wish the load, store to be tightly coupled together, it is natural
 to express this operation as a `load [copy]` instruction. Lets define the `load
