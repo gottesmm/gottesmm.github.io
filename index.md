@@ -1,6 +1,6 @@
 ---
 layout: default
-title: Michael Gottesman's Working Swift Documents
+title: Michael Gottesman's Working Documents
 ---
 
 This site contains drafts and random ideas about Swift, Performance, and
