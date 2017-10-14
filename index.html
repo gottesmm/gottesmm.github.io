@@ -1,0 +1,17 @@
+---
+layout: default
+title: Michael Gottesman's Working Documents
+---
+
+This site contains drafts and random ideas about Swift, Performance, and
+Compiler Development. It is not intended to be a personal blog, but rather an
+"idea repository".
+
+<ul class="article-list">
+{% assign items = site.pages | sort: 'date' | reverse %}
+{% for page in items %}
+  {% if page.categories contains 'proposals' %}
+  <li class="article-list-item"><a href="{{ page.url }}">{{ page.title }}</li>
+  {% endif %}
+{% endfor %}
+</ul>

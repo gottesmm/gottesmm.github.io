@@ -1,10 +1,10 @@
 ---
-layout: default
+layout: page
 title: Topological ARC Optimization (Mathy Version)
 categories: proposals
 ---
 
-# Summary
+## Summary
 
 This document defines a new form of ARC optimization based on topology. We use
 topology to define single entry multiple exit regions. For those who are
@@ -16,7 +16,7 @@ optimizations to set operations on regions of instructions. We show each
 individual operation with examples and then show how we will implement it using
 a single dataflow pass.
 
-# ARC Optimization Examples
+## ARC Optimization Examples
 
 There are 3 basic forms of ARC optimization. We first list them below and then
 display how each can be reduced to a set operation.
@@ -28,7 +28,7 @@ display how each can be reduced to a set operation.
 **NOTE** In the following we are only considering instructions in basic
 blocks. We can extend this analysis to CFGs later.
 
-## Lifetime Extension Optimization
+### Lifetime Extension Optimization
 
 The lifetime extension pattern looks as follows:
 
@@ -55,7 +55,7 @@ region:
 
 **NOTE** Notice that there are no requirements on ``%x1's`` ownership.
 
-## Guaranteed Lifetime Optimization
+### Guaranteed Lifetime Optimization
 
 The guaranteed lifetime optimization is defined by the following initial
 condition:
@@ -81,7 +81,7 @@ completely subsumes Ownership Region 2, the end result is just Ownership Region
     ... (code block 3)
     destroy_value %x2       (End Ownership Region 1)
 
-## Consumed Optimization
+### Consumed Optimization
 
 The consumed optimization is defined by the following initial conditions:
 
@@ -113,7 +113,7 @@ and will end at End Ownership Region 2. Thus we will have:
     consuming_apply(%x3)     (End Ownership Region 2)
     ... (code block 3)
 
-# Implementation
+## Implementation
 
 Loop over the whole CFG gathering up producers/consumers. This is known
 trivially. Using the APIs from semantic ARC given just 1 producer or consumer,

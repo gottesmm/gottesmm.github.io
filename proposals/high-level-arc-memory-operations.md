@@ -1,5 +1,5 @@
 ---
-layout: default
+layout: page
 title: High Level ARC Memory Operations
 categories: proposals
 ---

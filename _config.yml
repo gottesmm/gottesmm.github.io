@@ -25,4 +25,5 @@ markdown: kramdown
 kramdown:
   syntax_highlighter: rouge
 
-
+include: ["proposals"]
+permalink: /:title/

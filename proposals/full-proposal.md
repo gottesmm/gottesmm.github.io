@@ -1,10 +1,8 @@
 ---
-layout: default
+layout: page
 title: SIL Ownership Model (Old Full Document)
 categories: proposals
 ---
-
-# SIL Ownership Model
 
 In this document, we propose a SIL Ownership Model. We assume that the reader is
 already familiar with SIL, the concept of an ownership producer, ownership

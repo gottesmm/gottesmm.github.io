@@ -1,5 +1,5 @@
 ---
-layout: default
+layout: page
 title: Semantic ARC High Level Proposal
 categories: proposals
 ---
