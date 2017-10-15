@@ -4,23 +4,21 @@ title: High Level ARC Value Operations
 categories: proposals
 ---
 
-# {{ page.title }}
-
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-generate-toc again -->
 **Table of Contents**
 
-- [Summary](#summary)
-- [Definitions](#definitions)
-    - [copy_value](#copyvalue)
-    - [copy_unowned_value](#copyunownedvalue)
-    - [destroy_value](#destroyvalue)
-- [Implementation](#implementation)
-    - [Plan](#plan)
-    - [Optimizer Changes](#optimizer-changes)
+- [Summary](##summary)
+- [Definitions](##definitions)
+    - [copy_value](##copyvalue)
+    - [copy_unowned_value](##copyunownedvalue)
+    - [destroy_value](##destroyvalue)
+- [Implementation](##implementation)
+    - [Plan](##plan)
+    - [Optimizer Changes](##optimizer-changes)
 
 <!-- markdown-toc end -->
 
-# Summary
+## Summary
 
 This document proposes:
 
@@ -34,9 +32,9 @@ This document proposes:
 This will allow for the SIL IR to express ownership conventions via SSA use-def
 chains.
 
-# Definitions
+## Definitions
 
-## copy_value
+### copy_value
 
 Define a `copy_value` as follows:
 
@@ -48,7 +46,7 @@ Define a `copy_value` as follows:
     retain_value %x : $C
     use(%x)
 
-## copy_unowned_value
+### copy_unowned_value
 
 Define a `copy_unowned_value` as:
 
@@ -66,7 +64,7 @@ associated with the `copy_unowned_value` to be balanced by a
     ...
     destroy_value %y : $T
 
-## destroy_value
+### destroy_value
 
 Define a `destroy_value` as follows:
 
@@ -76,9 +74,9 @@ Define a `destroy_value` as follows:
 
     release_value %x : $C
 
-# Implementation
+## Implementation
 
-## Plan
+### Plan
 
 We assume that
 the [High Level ARC Memory Operations](high-level-arc-memory-operations)
@@ -103,7 +101,7 @@ Then we wire up the building blocks:
 3. The verifier when in EnforceSILOwnershipMode will verify that none of the
    instructions that we wish to remove are in the IR.
 
-## Optimizer Changes
+### Optimizer Changes
 
 Since the SILOwnershipModel eliminator will eliminate the `copy_value`,
 `copy_unowned_value`, and `destroy_value` operations right after ownership
@@ -116,14 +114,14 @@ pipeline.
 We now go through all of the passes that will need updating to handle these
 changes:
 
-### ARC Optimizer
+#### ARC Optimizer
 
 Since the ARC optimizer does not perform code motion any more, only minimal
 changes will be required. Specifically, all we must do is recognize copy_value
 as a retain instruction and destroy_value as a release instruction. Everything
 then will *just* work.
 
-### ARC Code Motion and Function Signature Optimization
+#### ARC Code Motion and Function Signature Optimization
 
 Both of these passes will need to recognize `copy_value`, `destroy_value`
 instructions as retain, release and be changed to emit `copy_value` or
@@ -132,13 +130,13 @@ motion rather than just re-emitting retain, release instructions without
 considering use-def lists, it must now consider such issues to ensure that we do
 not violate use-def dominance.
 
-### Misc compiler Peepholes: SILCombine, Mandatory Inlining, etc.
+#### Misc compiler Peepholes: SILCombine, Mandatory Inlining, etc.
 
 There are many peepholes in the compiler that emit retain, release instructions
 for ARC optimizations to clean up later. These must be updated to use the new
 instructions. This will be mechanical.
 
-### Side Effects
+#### Side Effects
 
 The side effects subsystem needs to be updated to handle copy_value like it does
 a retain and destroy_value like it does a release. This should be mechanical.

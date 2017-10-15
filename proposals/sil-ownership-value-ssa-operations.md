@@ -4,19 +4,19 @@ title: SIL Ownership SSA Value Operations
 categories: proposals
 ---
 
-# {{ page.title }}
+## {{ page.title }}
 
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-generate-toc again -->
 **Table of Contents**
 
-- [Summary](#summary)
-- [Definitions](#definitions)
-    - [store_borrow](#storeborrow)
-    - [begin_borrow](#beginborrow)
+- [Summary](##summary)
+- [Definitions](##definitions)
+    - [store_borrow](##storeborrow)
+    - [begin_borrow](##beginborrow)
 
 <!-- markdown-toc end -->
 
-# Summary
+## Summary
 
 This document proposes the addition of the following new SIL instructions:
 
@@ -31,9 +31,9 @@ These enable the expression of the following operations in Semantic SIL:
    aggregate. (`begin_borrow`)
 3. Passing an `@owned` value as an `@guaranteed` argument parameter.
 
-# Definitions
+## Definitions
 
-## store_borrow
+### store_borrow
 
 Define `store_borrow` as:
 
@@ -80,18 +80,18 @@ inefficient `copy_value` + `store` + `load` + `destroy_value` sequence:
 **NOTE** Once `@in_guaranteed` arguments become passed as values, `store_borrow`
 will no longer be necessary.
 
-## begin_borrow
+### begin_borrow
 
 Define a `begin_borrow` instruction as:
 
     %borrowed_x = begin_borrow %x : $T
-    %borrow_x_field = struct_extract %borrowed_x : $T, #T.field
+    %borrow_x_field = struct_extract %borrowed_x : $T, ##T.field
     apply %f(%borrowed_x) : $@convention(thin) (@guaranteed T) -> ()
     end_borrow %borrowed_x from %x : $T, $T
 
       =>
 
-    %x_field = struct_extract %x : $T, #T.field
+    %x_field = struct_extract %x : $T, ##T.field
     apply %f(%x_field) : $@convention(thin) (@guaranteed T) -> ()
     
 A `begin_borrow` instruction explicitly converts an `@owned` value to a

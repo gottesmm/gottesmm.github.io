@@ -4,12 +4,12 @@ title: SIL Ownership Model (Newer Full Document)
 categories: proposals
 ---
 
-# Preliminary Information
+## Preliminary Information
 
 Here we quickly define some terms and give some information about Ownership at the
 SIL level that we will be referring to below.
 
-## Producers/Consumers of SSA values
+### Producers/Consumers of SSA values
 
 **TODO** Describe how there are non-side-effect having instructions and other
 side-effect having forwarding instructions.
@@ -20,7 +20,7 @@ create regions of guaranteed parameters and sets up the ability to talk about
 load_strong [guaranteed] in the load_strong document (which creates a guaranteed
 region).
 
-# Summary
+## Summary
 
 In this document, we propose the creation of a SIL Ownership Model. We assume
 that the reader is already familiar with SIL and has read the Definitions
@@ -88,7 +88,7 @@ Once this has been done, the optimizer will gain the following benefits:
    @guaranteed regions. This will then allow us to in a natural way extend our
    aggressive guaranteed optimizations to subregions of the CFG.
 
-# Replace Low Level Dataflow ARC Operations with High Level Use-Def ARC Operations
+## Replace Low Level Dataflow ARC Operations with High Level Use-Def ARC Operations
 
 Most of the main ARC optimization primitives today can not be analyzed except
 via dataflow. This makes static verification of properties such as pairing,
@@ -102,7 +102,7 @@ The specific changes that we propose are:
 2. Replace strong_retain, retain_value with a copy_value operation.
 3. Replace strong_release, release_value with a destroy_value operation.
 
-## Add strong_store/load_strong
+### Add strong_store/load_strong
 
 The reason to perform this change is that combining those operations into single
 SIL instructions allows the optimizer to avoid miscompiles that can occur due to
@@ -112,7 +112,7 @@ aggressive when performing code motion of ARC operations since we no longer have
 to worry about a release triggering a deinit before ownership of an object is
 fully taken.
 
-## strong_retain/retain_value => copy_value
+### strong_retain/retain_value => copy_value
 
 The main reason to perform this change is that it enables the ownership effect
 of the reference count increment to be modeled as the copy_value returning an
@@ -128,14 +128,14 @@ strong_release. IRGen is more than capable of understanding which SILTypes
 require just a strong_release and which require more in depth handling ala
 release_value.
 
-## strong_release/release_value => destroy_value
+### strong_release/release_value => destroy_value
 
 The simple reason to perform this change is to require these primitives to match
 in name copy_value. We also eliminate the similarly unnecessary non-trivial
 type/reference semantic type as by transforming strong_retain/retain_value =>
 copy_value.
 
-# The "Producer/Consumer Discovery" Algorithm and Verifier
+## The "Producer/Consumer Discovery" Algorithm and Verifier
 
 Once all data-flow only ARC operations at the SIL level have been eliminated, we
 then can begin to implement the "Producer/Consumer Discovery" algorithm. The
@@ -177,12 +177,12 @@ instruction or if we missed any specific cases during implementation.
 sure that each can be understood. I have not thought about if this would work
 (am in a bit of a rush), so I am suggesting the full solution for now.
 
-# Ensure all retain/release are at the same level of SCCs (i.e. no semantic pairings over loop boundaries)
+## Ensure all retain/release are at the same level of SCCs (i.e. no semantic pairings over loop boundaries)
 
 **TODO** Might fold this into the previous section maybe? I use this invariant
 in the "Singular Pairing Algorithm".
 
-# The "Ownership Compatibility Verifier"
+## The "Ownership Compatibility Verifier"
 
 The next step is that we need to ensure that all consumers and producers have
 compatible ownership conventions. This means that:
@@ -207,7 +207,7 @@ discovery algorithm by ignoring instructions for which the "Producer/Consumer"
 discovery algorithm returns unknown and are not in the white list for the
 "Producer/Consumer" discovery algorithm.
 
-# The "Singular Matching Algorithm"
+## The "Singular Matching Algorithm"
 
 After all of this work, we know that:
 
@@ -236,6 +236,6 @@ implementation this implies proving the following for a producers consumer set
    not have any children that are not reachable from an element of the consumer
    set.
 
-# Represent Address Only Types via SSA values instead of Memory Locations
+## Represent Address Only Types via SSA values instead of Memory Locations
 
 In terms of attempting to represent address only types as SSA values.

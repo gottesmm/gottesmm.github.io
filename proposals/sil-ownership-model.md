@@ -4,25 +4,25 @@ title: SIL Ownership Model
 categories: proposals
 ---
 
-# {{ page.title }}
+## {{ page.title }}
 
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-generate-toc again -->
 **Table of Contents**
 
-- [Summary](#summary)
-- [Cleanly separating Value and Def APIs in SIL](#cleanly-separating-value-and-def-apis-in-sil)
-- [Values and ValueOwnershipKinds](#values-and-valueownershipkinds)
-- [ValueDefs and Ownership Constraints](#valuedefs-and-ownership-constraints)
-- [Verification of Ownership Semantics](#verification-of-ownership-semantics)
-    - [Use Verification](#use-verification)
-    - [Dataflow Verification](#dataflow-verification)
-- [Appendix](#appendix)
-    - [Changes to SILValue API for SIL Ownership](#changes-to-silvalue-api-for-sil-ownership)
-    - [Full Dataflow Verification Algorithm](#full-dataflow-verification-algorithm)
+- [Summary](##summary)
+- [Cleanly separating Value and Def APIs in SIL](##cleanly-separating-value-and-def-apis-in-sil)
+- [Values and ValueOwnershipKinds](##values-and-valueownershipkinds)
+- [ValueDefs and Ownership Constraints](##valuedefs-and-ownership-constraints)
+- [Verification of Ownership Semantics](##verification-of-ownership-semantics)
+    - [Use Verification](##use-verification)
+    - [Dataflow Verification](##dataflow-verification)
+- [Appendix](##appendix)
+    - [Changes to SILValue API for SIL Ownership](##changes-to-silvalue-api-for-sil-ownership)
+    - [Full Dataflow Verification Algorithm](##full-dataflow-verification-algorithm)
 
 <!-- markdown-toc end -->
 
-# Summary
+## Summary
 
 This document defines a SIL ownership model and a compile time static verifier
 for the model. This will allow for static compile time verification that a SIL
@@ -45,7 +45,7 @@ edges. This is accomplished by:
    are compatible with the ownership kind propagated by their operand
    `SILValue`s and that pseudo-linear dataflow constraints are maintained.
 
-# Cleanly separating Value and Def APIs in SIL
+## Cleanly separating Value and Def APIs in SIL
 
 All values in SIL are defined via an assignment statement of the form: `<foo> = <bar>`.
 In English, we say `foo` is a value that is defined by the def
@@ -103,9 +103,9 @@ internal `ValueDef` of a `SILValue`, i.e.:
         };
 
 To see how specific common code patterns change in light of these changes,
-please see the [appendix](#changes-to-silvalue-api-for-sil-ownership).
+please see the [appendix](##changes-to-silvalue-api-for-sil-ownership).
 
-# Values and ValueOwnershipKinds
+## Values and ValueOwnershipKinds
 
 Define `ValueOwnershipKind` as the enum with the following cases:
 
@@ -132,7 +132,7 @@ API on `SILValue` :
 Since the implementation of `SILValue::getOwnershipKind()` will be out of line,
 none of the visitor code will be exposed to the rest of the compiler.
 
-# ValueDefs and Ownership Constraints
+## ValueDefs and Ownership Constraints
 
 In order to determine if a `SILInstruction`'s operands are SILValue that have
 compatible ownership with a `SILInstruction`, we introduce a new API on
@@ -162,9 +162,9 @@ which returns the required ownership constraint. In terms of representing these
 ownership constraint conventions in textual SIL, we print out the ownership
 constraint next to the specific argument in the block and the specific argument
 in the given terminator. For details of how this will look with various
-terminators, see the [appendix](#sil-argument-terminator-convention-examples).
+terminators, see the [appendix](##sil-argument-terminator-convention-examples).
 
-# Verification of Ownership Semantics
+## Verification of Ownership Semantics
 
 Since our ownership model is based around SSA form, all verification of
 ownership only need consider an individual value (`SILValue`) and the uses of
@@ -174,7 +174,7 @@ the def (`SILInstruction`, `SILArgument`). Thus for each def/use-set, we:
    `ValueOwnershipKind`.
 2. **Dataflow Verification**: Given any path P in the program and a `ValueDef`
    `V` along that path:
-   a. There exists only one <a href="#footnote-0-lifetime-ending-use">"lifetime ending"</a> use of `V` along that path.
+   a. There exists only one <a href="##footnote-0-lifetime-ending-use">"lifetime ending"</a> use of `V` along that path.
    b. After the lifetime ending use of `V`, there are no non-lifetime ending
       uses of `V` along `P`.
 
@@ -182,7 +182,7 @@ Since the dataflow verification requires knowledge of a subset of the uses, we
 perform the use semantic verification first and then use the found uses for the
 dataflow verification.
 
-## Use Verification
+### Use Verification
 
 Just like with `SILValue`, individual `SILInstruction` kind's have well-defined
 ownership semantics implying that we can use a `SILVisitor` approach here as
@@ -195,7 +195,7 @@ specific use should be considered a "lifetime ending" use. The checker then
 stores the lifetime ending uses and non-lifetime ending uses in two separate
 arrays for processing by the dataflow verifier.
 
-## Dataflow Verification
+### Dataflow Verification
 
 The dataflow verifier takes in as inputs the `SILValue` and lists of
 lifetime-ending and non-lifetime ending uses. Since we are using SSA form, we
@@ -220,14 +220,14 @@ just needing to prove that when we walk the CFG up to prove reachability, that
 any block on the reachability path does not have any successors that have not
 been visited when we finish walking and visit the def.
 
-The full code is in the [appendix](#full-dataflow-verification-algorithm).
+The full code is in the [appendix](##full-dataflow-verification-algorithm).
 
 <a id="footnote-0-lifetime-ending-use">[0]</a>: A use after which a def is no
 longer allowed to be used in any way, e.g. `destroy_value`, `end_borrow`.
 
-# Appendix
+## Appendix
 
-## Changes to SILValue API for SIL Ownership
+### Changes to SILValue API for SIL Ownership
 
 The common code pattern eliminated by removing implicit uses of `ValueDef`'s API
 via a `SILValue` are as follows:
@@ -289,7 +289,7 @@ access control and declaring `ValueDef` subclasses as friends of
 `SILValue`, but disallows external users of the API from directly creating
 `SILValue` from `ValueDef`, enforcing the value/def distinction in our model.
 
-## SILArgument/Terminator OwnershipConvention Examples
+### SILArgument/Terminator OwnershipConvention Examples
 
 We present here several examples of how ownership conventions look on
 SILArguments and terminators.
@@ -334,7 +334,7 @@ Now consider two examples of switches:
 
     sil @owned_switch_enum : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
     bb0(%0 : @owned $Optional<Builtin.NativeObject>):
-      switch_enum %0 : @owned $Builtin.NativeObject, #Optional.none.enumelt: bb1, #Optional.some.enumelt.1: bb2
+      switch_enum %0 : @owned $Builtin.NativeObject, ##Optional.none.enumelt: bb1, #Optional.some.enumelt.1: bb2
 
     bb1:
       br bb3
@@ -351,7 +351,7 @@ Now consider two examples of switches:
     sil @guaranted_converted_switch_enum : $@convention(thin) : $@convention(thin) (@owned Optional<Builtin.NativeObject>) -> () {
     bb0(%0 : @owned $Optional<Builtin.NativeObject>):
       %1 = begin_borrow %0 : $Optional<Builtin.NativeObject>
-      switch_enum %1 : @guaranteed $Builtin.NativeObject, #Optional.none.enumelt: bb1, #Optional.some.enumelt.1: bb2
+      switch_enum %1 : @guaranteed $Builtin.NativeObject, ##Optional.none.enumelt: bb1, #Optional.some.enumelt.1: bb2
 
     bb1:
       br bb3
@@ -370,7 +370,7 @@ Now consider two examples of switches:
 Notice how the lifetime is completely explicit in both cases, so the optimizer
 can not treat the conversion of switch_enum from +1 to +0 implicitly.
 
-## Full Dataflow Verification Algorithm
+### Full Dataflow Verification Algorithm
 
 Define the following book keeping data structures.
 

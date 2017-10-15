@@ -5,11 +5,11 @@ categories: proposals
 ---
 
 $$
-\newcommand{\set}[1]{\left\{#1\right\}}
-\newcommand{\mb}[1]{\mathbf{#1}}
+\newcommand{\set}[1]{\left\{##1\right\}}
+\newcommand{\mb}[1]{\mathbf{##1}}
 \newcommand{\P}{\mb P}
 \newcommand{\successor}{\mb{\text{succ}}}
-\newcommand{\magnitude}[1]{\left|#1\right|}
+\newcommand{\magnitude}[1]{\left|##1\right|}
 \newcommand{\branch}{\mb{\text{Branch}}}
 \newcommand{\Bool}{\mb{\text{Bool}}}
 \newcommand{\BB}{\mb{\text{BB}}}
@@ -17,7 +17,7 @@ $$
 \newcommand{\and}{\text{ and }}
 $$
 
-# Summary
+## Summary
 
 This document defines the program path topology and program post-path
 topology. These two topologies subsume the concepts of dominance and
@@ -27,7 +27,7 @@ think about optimizing programs in a CFG.
 
 **NOTE** In our model, we explicitly disallow any implicit CFG edges.
 
-# Preliminary Definitions
+## Preliminary Definitions
 
 For a given program, imagine the infinite set of instructions of the program
 completely unrolled. Then define the program set $$\P$$ as the countably
@@ -65,7 +65,7 @@ flow free paths unioned with the set consisting of that sets branch
 instruction. We naturally can then extend the $$\successor$$ function on our
 paths then to our basic blocks. **TODO** Include this definition.
 
-# Program Path Topology
+## Program Path Topology
 
 Now we define the program path topology. Consider an instruction $$i \in
 \P$$. Naturally there is a set of paths $$p \subset \P^*$$ such that all

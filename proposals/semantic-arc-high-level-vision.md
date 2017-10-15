@@ -4,13 +4,13 @@ title: Semantic ARC High Level Proposal
 categories: proposals
 ---
 
-# Preface
+## Preface
 
 For Swift 4, we plan to introduce "Semantic ARC", a major overhaul of ownership
 in SIL. This document outlines the problems solved by "Semantic ARC", how it
 works, and an engineering plan for implementing it.
 
-# The Problem and the Goal
+## The Problem and the Goal
 
 As defined today, SIL represents retain/release operations as independent
 operations, without surfacing the relationships that would the most aggressive
@@ -25,7 +25,7 @@ preserve crucial information, allowing us to:
 4. Lay the groundwork for the representation of other forms of ownership, such
    as move semantics, in SIL.
 
-# The Engineering Plan
+## The Engineering Plan
 
 The engineering plan involves the following steps:
 

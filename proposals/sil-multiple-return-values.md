@@ -4,7 +4,7 @@ title: SIL Multiple Return Values
 categories: proposals
 ---
 
-# Introduction
+## Introduction
 
 This document is a proposal to re-add multiple return values to SIL. The reason
 why this is being proposed is to enable for a destructure operation to be
@@ -13,7 +13,7 @@ implemented in SIL. The structure of this document is as follows:
 1. Background and Justification.
 2. Design
 
-# Background and Justification
+## Background and Justification
 
 SIL originally had multiple return values. These were removed in the past year
 since the APIs that were used to manipulate return values were difficult to use
@@ -64,7 +64,7 @@ introduce multiple defs whose properties can be verified independently.
 
 I'll tackle these other sections in another email.  Let's go one at a time.
 
-# Cleanly separating Value and Def APIs in SIL
+## Cleanly separating Value and Def APIs in SIL
 
 All values in SIL are defined via an assignment statement of the form: `<foo> = <bar>`.
 In English, we say `foo` is a value that is defined by the def
@@ -128,7 +128,7 @@ type-punning, but you can make it work as efficiently as one.
 
 <!--
 
-## Multiple Return Value Implementation
+### Multiple Return Value Implementation
 
 Now that we have separated the APIs that relate `SILValue` and `ValueDef`
 cleanly. (TODO Maybe say match the model?), we need to consider how to represent
