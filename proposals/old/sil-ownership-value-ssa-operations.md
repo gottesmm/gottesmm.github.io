@@ -1,7 +1,7 @@
 ---
 layout: page
 title: SIL Ownership SSA Value Operations
-categories: proposals
+categories: proposals old
 ---
 
 ## {{ page.title }}

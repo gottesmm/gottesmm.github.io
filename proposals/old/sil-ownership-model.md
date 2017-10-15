@@ -1,7 +1,7 @@
 ---
 layout: page
 title: SIL Ownership Model
-categories: proposals
+categories: proposals old
 ---
 
 ## {{ page.title }}

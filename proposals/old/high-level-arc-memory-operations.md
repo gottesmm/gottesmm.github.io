@@ -1,7 +1,7 @@
 ---
 layout: page
 title: High Level ARC Memory Operations
-categories: proposals
+categories: proposals old
 ---
 
 <!-- markdown-toc start - Don't edit this section. Run M-x markdown-toc-generate-toc again -->

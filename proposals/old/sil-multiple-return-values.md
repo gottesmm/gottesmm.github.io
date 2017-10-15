@@ -1,7 +1,7 @@
 ---
 layout: page
 title: SIL Multiple Return Values
-categories: proposals
+categories: proposals old
 ---
 
 ## Introduction

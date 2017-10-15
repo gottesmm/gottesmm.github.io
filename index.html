@@ -11,7 +11,10 @@ Compiler Development. It is not intended to be a personal blog, but rather an
 {% assign items = site.pages | sort: 'date' | reverse %}
 {% for page in items %}
   {% if page.categories contains 'proposals' %}
+    {% if page.categories contains 'old' %}
+    {% else %}
   <li class="article-list-item"><a href="{{ page.url }}">{{ page.title }}</li>
+  {% endif %}
   {% endif %}
 {% endfor %}
 </ul>

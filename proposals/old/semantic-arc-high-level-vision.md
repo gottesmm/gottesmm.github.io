@@ -1,7 +1,7 @@
 ---
 layout: page
 title: Semantic ARC High Level Proposal
-categories: proposals
+categories: proposals old
 ---
 
 ## Preface

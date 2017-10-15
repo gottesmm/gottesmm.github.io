@@ -1,7 +1,7 @@
 ---
 layout: page
 title: SIL Ownership Model (Old Full Document)
-categories: proposals
+categories: proposals old
 ---
 
 In this document, we propose a SIL Ownership Model. We assume that the reader is
