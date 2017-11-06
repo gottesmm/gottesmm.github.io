@@ -4,18 +4,20 @@ title: The Program Path Topology
 categories: draft
 ---
 
+{% raw %}
 $$
-\newcommand{\set}[1]{\left\{##1\right\}}
-\newcommand{\mb}[1]{\mathbf{##1}}
+\newcommand{\set}[1]{\left\{#1\right\}}
+\newcommand{\mb}[1]{\mathbf{#1}}
 \newcommand{\P}{\mb P}
 \newcommand{\successor}{\mb{\text{succ}}}
-\newcommand{\magnitude}[1]{\left|##1\right|}
+\newcommand{\magnitude}[1]{\left|#1\right|}
 \newcommand{\branch}{\mb{\text{Branch}}}
 \newcommand{\Bool}{\mb{\text{Bool}}}
 \newcommand{\BB}{\mb{\text{BB}}}
 \newcommand{\N}{\mb{\text{N}}}
 \newcommand{\and}{\text{ and }}
 $$
+{% endraw %}
 
 ## Summary
 
