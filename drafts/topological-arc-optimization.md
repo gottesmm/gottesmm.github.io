@@ -1,7 +1,7 @@
 ---
 layout: page
 title: Topological ARC Optimization (Mathy Version)
-categories: proposals
+categories: draft
 ---
 
 ## Summary

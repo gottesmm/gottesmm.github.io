@@ -3,14 +3,30 @@ layout: default
 title: Michael Gottesman's Working Documents
 ---
 
-This site contains drafts and random ideas about Swift, Performance, and
-Compiler Development. It is not intended to be a personal blog, but rather an
-"idea repository".
+<p>This site contains two subdirectories. One for what I consider work I would like
+to share with others and the other a draft repository. The draft repository is
+what I call an "idea repository", i.e., its purpose is to record free flowing
+thoughts. Thus they may not be complete. Once I have sketched out an idea enough
+to the point where I would like to share it with others, I will have it on this
+page.</p>
+
+<p>Finished Ideas:</p>
 
 <ul class="article-list">
-{% assign items = site.pages | sort: 'date' | reverse %}
+{% assign items = site.pages | sort: 'date' %}
 {% for page in items %}
-  {% if page.categories contains 'proposals' %}
+  {% if page.categories contains 'complete' %}
+  <li class="article-list-item"><a href="{{ page.url }}">{{ page.title }}</li>
+  {% endif %}
+{% endfor %}
+</ul>
+
+<p>Idea Repository:</p>
+
+<ul class="article-list">
+{% assign items = site.pages | sort: 'date' %}
+{% for page in items %}
+  {% if page.categories contains 'draft' %}
     {% if page.categories contains 'old' %}
     {% else %}
   <li class="article-list-item"><a href="{{ page.url }}">{{ page.title }}</li>

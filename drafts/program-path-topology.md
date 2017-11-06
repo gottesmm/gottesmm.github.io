@@ -1,7 +1,7 @@
 ---
 layout: page
 title: The Program Path Topology
-categories: proposals
+categories: draft
 ---
 
 $$
