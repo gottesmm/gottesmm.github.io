@@ -76,8 +76,18 @@ higher level):
 4. The operation is something related to reachability.
 
 The last point is the most interesting to me since the reachability matrix of an
-adajacency matrix is an exponential! So one could imagine going from the lie
-algebra of pointed path sets (described by an adjacency matrix) going through an
-exponential to compute reachability on the manifold. Or something like that.
+adajacency matrix is the exponential of A, i.e.:
+
+$$
+  R(A) = \sum_{i=1}^n A^i
+$$
+
+where $$n$$ is the number of nodes in the graph. This relationship flows from
+the adjacency matrix being the set of one paths in a graph. One could even
+imagine a countably infinite such exponential.
+
+So one could imagine going from the lie algebra of pointed path sets (described
+by an adjacency matrix) going through an exponential to compute reachability on
+the manifold. Or something like that.
 
 Could one define a "connection" ala differential geometry here? Not sure.
