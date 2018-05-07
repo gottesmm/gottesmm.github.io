@@ -75,5 +75,3 @@ instructions $$i' \in p$$ are later than $$i$$. These sets of paths naturally
 form a topology since if we form the intersection of any such paths, we are
 still in the same set and if we form a union of any such paths, we also stay in
 the same set. We can do the same thing considering inverse paths.
-
-Naturally combining together
