@@ -50,7 +50,7 @@ ownership invariants.
 The general layout of this document is:
 
 * First, Ownership SSA is defined abstractly.
-* Then for each case of``ValueOwnershipKind``, we define the relevant dataflow
+* Then for each case of ``ValueOwnershipKind``, we define the relevant dataflow
   rules and explain how the ``UseLifetimeConstraint`` provided by a using
   operand ties into those dataflow rules.
 * Finally, the structural, semantic changes to SIL necessary to implement this
