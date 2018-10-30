@@ -40,7 +40,7 @@ SSA concepts (e.x. dominance) of SIL by defining the following rules: Let _p_ be
 a point in a SIL program then,
 
 1. **Values are statically available or unavailable**: For any dominating value
-   _v_ of _p_, there must exit a statically derivable mapping of _v_ to one of
+   _v_ of _p_, there must exist a statically derivable mapping of _v_ to one of
    ``{available, unavailable}`` at _p_.
 
 2. **Unavailable values can not be used**: A program is ill-formed if there
