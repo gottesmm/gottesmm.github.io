@@ -99,7 +99,7 @@ value in SIL can have:
   to be in another value's borrow set. This is used to model move only values as
   well as individual copies of reference counted values.
 
-* **Guaranteed** - A value _v_ that is available within a single entry-multiple
+* **Borrowed** - A value _v_ that is available within a single entry-multiple
   exit region of code and must be in the borrow set of a single value _v'_ at
   all points within that region. This can be used to model "shared borrow" like
   constructs. Since a guaranteed value is in a borrow set at all points where it
@@ -124,8 +124,8 @@ input value is immortal. If the input value has ``Owned`` ownership, the value
 becomes unavailable after the use's execution.
 
 * **Reborrow** - A use that takes in an available value _v_ with either ``Any``
-or ``Guaranteed`` ownership. If _v_ has ``Any`` ownership, this is a point use
-of the input value since it is immortal. If _v_ has ``Guaranteed`` ownership,
+or ``Borrowed`` ownership. If _v_ has ``Any`` ownership, this is a point use
+of the input value since it is immortal. If _v_ has ``Borrowed`` ownership,
 then the evaluation of the use adds all non-``Any`` results of the use to all
 borrow sets containing _v_. The program is ill-formed if any of these results of
 the uses of _v_ are available when _v_ is unavailable. This results in recursive
@@ -143,8 +143,8 @@ results of instructions as follows:
   result have ``Any`` ownership, then the result must have ``Any`` ownership.
 
 * If any of the ``Forwarding`` (``Reborrow``) operands mapped to a result have
-  ``Owned`` (``Guaranteed``) ownership, then a non-trivially typed specified
-  result must have ``Owned`` (``Guaranteed``) ownership. If the result value is
+  ``Owned`` (``Borrowed``) ownership, then a non-trivially typed specified
+  result must have ``Owned`` (``Borrowed``) ownership. If the result value is
   trivially typed, then it will have ``Any`` ownership.
 
 * Ownership Consistency: A program is ill-formed if a ``Forwarding`` operand and
@@ -239,7 +239,7 @@ reborrowing. Specifically:
   borrow sets at that point is implied by the separate formation rules of
   ``begin_apply``.
 
-#### ForwardingOrReborrow Instructions
+#### ForwardOrReborrow Instructions
 
 There are certain classes of instructions that we allow to have either
 ``Forwarding`` or ``Reborrow`` operands. To ensure consistency, we only allow
@@ -276,7 +276,7 @@ SILArgument:
    predecessor terminators. This means that the rules around ``Forwarding`` and
    ``Reborrow`` operands apply to any such SILPhiArguments.
 
-3. Any SILArgument with ``Guaranteed`` ownership is not required to have pairing
+3. Any SILArgument with ``Borrowed`` ownership is not required to have pairing
    ``end_borrow``s. This is because a ``SILFunctionArgument`` naturally has an
    ``end_borrow`` like scope (the function itself) and ``SILPhiArgument``s with
    ``Guaranteed`` ownership rely on the ``end_borrow`` set of its incoming
