@@ -33,89 +33,120 @@ semantics along call graph edges will allow for entire Swift programs to be
 verified as statically preserving ownership invariants. We describe ``OSSA``
 below:
 
-## Ownership SSA Form
+## Ownership SSA Formally
 
-Ownership SSA Form or `OSSA` is a derived form of SSA that augments the normal
-SSA concepts (e.x. dominance) of SIL by defining the following rules: Let _p_ be
-a point in a SIL program then,
+In SIL, an SSA value _v_ is immortal and can be referenced at any point in the
+program dominated by _v_'s definition. When SIL is in OSSA form, we extend SSA
+by introducing the notion of a _semantic value_. A semantic value _s_ is a
+non-empty set of SSA values, _SSA(s)_, that all refer to the same underlying
+semantic program entity (e.g. a class instance or a struct with non-trivial
+fields). We require that all values _v_ in _SSA(s)_ have a static map from any
+point _p_ that _v_ dominates to a boolean discriminator that describes if a
+program is ill-formed if _v_ is used at _p_. We call this the _availability map_
+for _v_ at _p_ and write _Availability(v)(p)_. We require _Availability(v)(p)_
+to have the following properties:
 
-1. **Values are statically available or unavailable**: For any dominating value
-   _v_ of _p_, there must exist a statically derivable mapping of _v_ to one of
-   ``{available, unavailable}`` at _p_.
+* **Availability is Well defined**: If _v_ dominates a block _B_, then _Available(v)_ must be
+  the same along all incoming edges into _B_.
 
-2. **Unavailable values can not be used**: A program is ill-formed if there
-   exists a dominating value _v_ of _p_ that is both used at _p_ and is
-   unavailable at _p_.
+* **Availability does not Abandon Values**: If _v_ does not dominate a block _B_, but does
+  dominate a predecessor of _B_, then _Available(v)_ must be false in
+  _B_. _NOTE: There are special rules for terminators without successors, we
+  explain them below in the section Ownership SSA in SIL._
 
-3. **Values have static borrowed value sets**: All dominating values _v_ of _p_
-   must be statically mappable to a (potentially) empty set of "borrowed" values
-   at _p_.
+* **Availability does not Resurrect Values**: A program is ill-formed if there
+  exists points _p_, _p'_ with _p'_ being reachable from _p_ and
+  _Availability(v)(p')_ being true and _Availability(v)(p)_ being false.
 
-4. **Values in a borrowed set must be available**: A program is ill-formed if
-   there exists dominating values _v_, _v'_ of _p_ with _v'_ being unavailable
-   at _p_ and _v'_ being an element of the borrowed set of _v_ at _p_.
+* **Availability does not allow Immortal Values**: A program is ill-formed if
+  there exists a value _v_ in _SSA(s)_ for which there does not exist a program
+  point _p_ dominated by _v_ where _Availability(v)(p)_ is false.
 
-5. **Values with non-empty borrow sets must be available**: A program is
-   ill-formed if there exists a dominating value _v_ of _p_ that is both
-   unavailable at _p_ and has a non-empty borrow set at _p_.
+Given any such _v_, we define that any value _b_ derived from _v_ by a scoped
+_borrow operation_ must also be an element of _SSA(s)_. We define a borrow
+operation as an operation that:
 
-6. **States are well-defined**: A value _v_ which dominates a block _B_ must
-   have the same incoming availability state and incoming borrow set from all
-   predecessors of _B_.
+1. Uses a value _v_ and defines a new value _b_ whose availability depends on
+_v_'s within the scope in which _b_ is available. This dependence is enforced by
+_b_ having the property that if _Availability(v)(p)_ is false, then
+_Availability(b)(p)_ must also be false.
 
-7. **Values are never abandoned**: Given a block _B_, a predecessor block
-   _Pred(B)_ of _B_, and a value _v_ that does not dominate _B_, if _v_
-   dominates _Pred(B)_ then _v_ must be unavailable in _B_. For the purposes of
-   this rule, the terminators with no successors are treated as follows:
-     - ``return``, ``throw``, and ``unwind`` are considered to have a destination which
-       is never dominated by anything.
-     - ``unreachable`` is considered to not have a destination and thus is
-       unconstrained.
+2. Is joint-post dominated by a set of _end borrow_ operations that after which
+_b_ is no longer available.
 
-8. **Values cannot be resurrected**: A dominating value _v_ of _p_ that is
-   unavailable at _p_ can not be available at any point reachable from _p_.
+Since _SSA(s)_ is closed under borrow operations, a natural equivalence
+class structure arises if one considers the elements of _SSA(s)_ that are
+derived via iterative borrowed operations from the same underlying value to be
+equivalent. For our purposes, we wish to model semantics where there is only one
+such dominating value, so we restrict our definition of semantic values by
+stating that given any semantic value _s_ there must exist a single static value
+_D(s)_ in _SSA(s)_ that dominates all other _v_ in _SSA(s)_. We call this _D(s)_
+an _owned_ value and classify all other _v_ in _SSA(s)_ as _borrowed_ values.
 
-These rules naturally lead us to two important corollaries:
+Beyond borrow operations, we model a few other types of operations that we
+describe below:
 
-* **Uses can only cause values with empty borrow sets to become unavailable**:
-  If the evaluation of a use _u_ of _v_ causes _v_ to become unavailable, then
-  _v_ must have an empty borrow set at _u_. Otherwise, we would be violating
-  rule 4.
+1. Simple uses. An instruction that uses a _v_ in _SSA(s)_ and does not affect
+   _v_'s availability as a result of the use.
 
-* **Uses can only add to borrow sets of available values**. If the evaluation
-  of a use _u_ of _v_ results in the addition of a value _v'_ to _v_'s borrow
-  set, _v_ must be available at _u_.
+2. Copy operations. An instruction that takes in any _v_ in _SSA(s)_ and
+   produces a new _owned_ value _o_ that acts as _D(s)_ for a new semantic value
+   _s'_. Since _s'_ is a different semantic value from _s_, there are no
+   lifetime dependencies in between any elements of _SSA(s)_ or _SSA(s')_.
 
-Using this model, we define 4 different categories of ownership semantics that a
-value in SIL can have:
+3. Consuming operations. An instruction that takes in an _owned_ value and
+   invalidates it. Naturally this ends the lifetime of a semantic value since
+   all borrowed values must be at that point unavailable and values can not be
+   resurrected. By contraposition this implies that if a use does not have an
+   empty borrow set, then it can not be consumed. An important corollary of this
+   definition is that since owned values can not be immortal and can not be
+   resurrected, all owned values must necessarily be consumed exactly once along
+   all paths through the program.
 
-* **Any** - An immortal value that after definition is always available. It can
-  not have a non-empty borrow set and can not be placed into another value's
-  borrow set. All trivially typed values have ``Any`` ownership as well as all
-  SIL values in non-OSSA sil.
+Now that we have our abstract model of Ownership SSA, we define how this is
+implemented in SIL.
 
-* **Owned** - A value with a static set of joint-postdominating uses that
-  consume the value. ``Owned`` values can have a borrow set, but are not allowed
-  to be in another value's borrow set. This is used to model move only values as
-  well as individual copies of reference counted values.
+## Ownership SSA In SIL
 
-* **Borrowed** - A value _v_ that is available within a single entry-multiple
-  exit region of code and must be in the borrow set of a single value _v'_ at
-  all points within that region. This can be used to model "shared borrow" like
-  constructs. Since a guaranteed value is in a borrow set at all points where it
-  is available, naturally it cannot be consumed due to rule 4.
+In order to define this model in SIL, we begin by defining our _owned_ and
+_borrowed_ values. We extend the categorization slightly since in SIL we must
+also consider objc-bridging and trivial values. This results in us classifying
+values in the following four categories:
+
+* **Owned** - _D(s)_ for a semantic value _s_. Just like in our model, we
+  require _owned_ values to be used by a consuming operation exactly once along
+  any program path dominated by its definition.
+
+* **Borrowed** - A value _v_ that is an element of some _SSA(s)_ that is
+  produced from an _owned_ value via iterative scoped borrow operations. We
+  loosen our definition slightly by allowing for the _owned_ value to be in a
+  different function (function argument), the result of a terminator instruction
+  (block argument), in coroutine storage (a return value from coroutine
+  application), or in memory. In all such cases, we require the same
+  availability constraint to apply and that the lifetime of the borrow is
+  similarly scoped via a semantic program entity.
+
+* **Any** - An immortal value that after is always available after being
+  defined. This is a divergence from the formal model since the formal model
+  does not address such values. We necessarily add it to our model so that we
+  can model trivial values as well as non-trivial sum types that act like
+  trivial values from an ownership perspective (e.g. enum cases with trivial or
+  without any payload). We rely on the type system to enforce that these values
+  are passed only to places that can accept these values. In all such locations,
+  we are necessarily performing an ownership merge. See below for more detail
+  about ownership merging.
 
 * **Unowned** - A value that is only available up to the first side-effect
   having instruction after its definition. This is a special case needed for
   objc-compatibility and the ordering of the side-effect constraint is unmodeled
   in the ownership model today. We do model that unowned must be copied before
-  being used in a guaranteed or owned context.
+  being used in a borrowed or owned context.
 
-These are modeled as cases of the enum ``ValueOwnershipKind``. Just like we
-categorize the ownership semantics of values, we categorize the ownership
-semantics of the effects of these upon their operand values:
+In code, these are modeled as cases of the enum ``ValueOwnershipKind``. Just
+like we categorize the ownership semantics of values, we categorize the
+ownership semantics of the effects of these upon their operand values:
 
-* **Point** - A read only use of an available value. The value can have any type
+* **Simple** - A read only use of an available value. The value can have any type
 of ownership semantics.
 
 * **Consuming** and **Forwarding** - A use of either an Any or Owned available
@@ -201,7 +232,7 @@ important categories of instructions below.
 
 #### Borrow Instructions
 
-The instructions are used to introduce new guaranteed values:
+The instructions are used to introduce new borrow values:
 
 - ``begin_borrow`` requires its argument to be available and adds its result
   value to the borrow set of its argument.
