@@ -64,15 +64,16 @@ to have the following properties:
 
 Given any such _v_, we define that any value _b_ derived from _v_ by a scoped
 _borrow operation_ must also be an element of _SSA(s)_. We define a borrow
-operation as an operation that:
+operation as follows:
 
-1. Uses a value _v_ and defines a new value _b_ whose availability depends on
-_v_'s within the scope in which _b_ is available. This dependence is enforced by
-_b_ having the property that if _Availability(v)(p)_ is false, then
-_Availability(b)(p)_ must also be false.
+* **Borrowed values have Dependent Availability**: Given a value _v_, a borrow
+operation defines a new value _b_ whose availability depends on _v_'s within the
+scope in which _b_ is available. This dependence is enforced by _b_ having the
+property that if _Availability(v)(p)_ is false, then _Availability(b)(p)_ must
+also be false.
 
-2. Is joint-post dominated by a set of _end borrow_ operations that after which
-_b_ is no longer available.
+* **Borrowed values have Scoped Availability**: Is joint-post dominated by a set
+of _end borrow_ operations that after which _b_ is no longer available.
 
 Since _SSA(s)_ is closed under borrow operations, a natural equivalence
 class structure arises if one considers the elements of _SSA(s)_ that are
@@ -86,22 +87,22 @@ an _owned_ value and classify all other _v_ in _SSA(s)_ as _borrowed_ values.
 Beyond borrow operations, we model a few other types of operations that we
 describe below:
 
-1. Simple uses. An instruction that uses a _v_ in _SSA(s)_ and does not affect
-   _v_'s availability as a result of the use.
+* **Simple uses**. An instruction that uses a _v_ in _SSA(s)_ and does not
+  affect _v_'s availability as a result of the use.
 
-2. Copy operations. An instruction that takes in any _v_ in _SSA(s)_ and
-   produces a new _owned_ value _o_ that acts as _D(s)_ for a new semantic value
-   _s'_. Since _s'_ is a different semantic value from _s_, there are no
-   lifetime dependencies in between any elements of _SSA(s)_ or _SSA(s')_.
+* **Copy operations**. An instruction that takes in any _v_ in _SSA(s)_ and
+  produces a new _owned_ value _o_ that acts as _D(s)_ for a new semantic value
+  _s'_. Since _s'_ is a different semantic value from _s_, there are no lifetime
+  dependencies in between any elements of _SSA(s)_ or _SSA(s')_.
 
-3. Consuming operations. An instruction that takes in an _owned_ value and
-   invalidates it. Naturally this ends the lifetime of a semantic value since
-   all borrowed values must be at that point unavailable and values can not be
-   resurrected. By contraposition this implies that if a use does not have an
-   empty borrow set, then it can not be consumed. An important corollary of this
-   definition is that since owned values can not be immortal and can not be
-   resurrected, all owned values must necessarily be consumed exactly once along
-   all paths through the program.
+* **Consuming operations**. An instruction that takes in an _owned_ value and
+  invalidates it. Naturally this ends the lifetime of a semantic value since all
+  borrowed values must be at that point unavailable and values can not be
+  resurrected. By contraposition this implies that if a use does not have an
+  empty borrow set, then it can not be consumed. An important corollary of this
+  definition is that since owned values can not be immortal and can not be
+  resurrected, all owned values must necessarily be consumed exactly once along
+  all paths through the program.
 
 Now that we have our abstract model of Ownership SSA, we define how this is
 implemented in SIL.
