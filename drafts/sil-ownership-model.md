@@ -46,7 +46,7 @@ program is ill-formed if _v_ is used at _p_. We call this the _availability map_
 for _v_ at _p_ and write _Availability(v)(p)_. We require _Availability(v)(p)_
 to have the following properties:
 
-* **Availability is Well defined**: If _v_ dominates a block _B_, then _Available(v)_ must be
+* **Availability is Well Defined**: If _v_ dominates a block _B_, then _Available(v)_ must be
   the same along all incoming edges into _B_.
 
 * **Availability does not Abandon Values**: If _v_ does not dominate a block _B_, but does
