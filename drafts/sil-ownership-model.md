@@ -7,7 +7,8 @@ categories: draft
 **Table of Contents**
 
 - [Abstract](#abstract)
-- [Ownership SSA Form](#ownership-ssa-form)
+- [Ownership SSA Formally](#ownership-ssa-formally)
+- [Ownership SSA In SIL](#ownership-ssa-in-sil)
 - [SIL Changes for OSSA](#sil-changes-for-ossa)
     - [Functions](#functions)
     - [SILValue](#silvalue)
@@ -16,10 +17,9 @@ categories: draft
         - [Borrow Instructions](#borrow-instructions)
         - [Lifetime Maintenance Instructions](#lifetime-maintenance-instructions)
         - [Function Application/Coroutine Instructions](#function-applicationcoroutine-instructions)
-        - [ForwardingOrReborrow Instructions](#forwardingorreborrow-instructions)
+        - [ForwardOrReborrow Instructions](#forwardorreborrow-instructions)
         - [Value Projections and Destructures](#value-projections-and-destructures)
-     - [SILArguments](#silarguments)
-
+    - [SILArgument](#silargument)
 <!-- markdown-toc end -->
 
 ## Abstract
