@@ -77,7 +77,7 @@ of _end borrow_ operations that after which _b_ is no longer available.
 
 Since _SSA(s)_ is closed under borrow operations, a natural equivalence
 class structure arises if one considers the elements of _SSA(s)_ that are
-derived via iterative borrowed operations from the same underlying value to be
+derived via nested borrowed operations from the same underlying value to be
 equivalent. For our purposes, we wish to model semantics where there is only one
 such dominating value, so we restrict our definition of semantic values by
 stating that given any semantic value _s_ there must exist a single static value
@@ -119,7 +119,7 @@ values in the following four categories:
   any program path dominated by its definition.
 
 * **Borrowed** - A value _v_ that is an element of some _SSA(s)_ that is
-  produced from an _owned_ value via iterative scoped borrow operations. We
+  produced from an _owned_ value via nested scoped borrow operations. We
   loosen our definition slightly by allowing for the _owned_ value to be in a
   different function (function argument), the result of a terminator instruction
   (block argument), in coroutine storage (a return value from coroutine
