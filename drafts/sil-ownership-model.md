@@ -35,74 +35,76 @@ below:
 
 ## Ownership SSA Formally
 
-In SIL, an SSA value _v_ is immortal and can be referenced at any point in the
-program dominated by _v_'s definition. When SIL is in OSSA form, we extend SSA
-by introducing the notion of a _semantic value_. A semantic value _s_ is a
-non-empty set of SSA values, _SSA(s)_, that all refer to the same underlying
-semantic program entity (e.g. a class instance or a struct with non-trivial
-fields). We require that all values _v_ in _SSA(s)_ have a static map from any
-point _p_ that _v_ dominates to a boolean discriminator that describes if a
-program is ill-formed if _v_ is used at _p_. We call this the _availability map_
-for _v_ at _p_ and write _Availability(v)(p)_. We require _Availability(v)(p)_
-to have the following properties:
+Let _f_ be a SIL function. A SSA value _v_ in _f_ is immortal and can be
+referenced at any point dominated by _v_'s definition. When SIL is in
+OSSA form, we extend SSA by requiring that all such _v_ provide a static map
+from any point _p_ dominated by _v_ to a boolean discriminator that defines
+whether or not a use of _v_ at _p_ results in _f_ being ill-formed. We call this
+the _availability map_ for _v_ at _p_ and write _Availability(v)(p)_. We require
+_Availability(v)(p)_ to have the following properties:
 
 * **Availability is Well Defined**: If _v_ dominates a block _B_, then _Available(v)_ must be
   the same along all incoming edges into _B_.
 
 * **Availability does not Abandon Values**: If _v_ does not dominate a block _B_, but does
   dominate a predecessor of _B_, then _Available(v)_ must be false in
-  _B_. _NOTE: There are special rules for terminators without successors, we
-  explain them below in the section Ownership SSA in SIL._
+  _B_.
 
 * **Availability does not Resurrect Values**: A program is ill-formed if there
   exists points _p_, _p'_ with _p'_ being reachable from _p_ and
   _Availability(v)(p')_ being true and _Availability(v)(p)_ being false.
 
-* **Availability does not allow Immortal Values**: A program is ill-formed if
-  there exists a value _v_ in _SSA(s)_ for which there does not exist a program
-  point _p_ dominated by _v_ where _Availability(v)(p)_ is false.
+By specifying properties of a value's availability map, we can define ownership
+semantics for the value and enforce them in SIL. The first kind of ownership
+semantic that we define is that of the "owned" value. Let _v_ be an _owned_
+value in _f_. Then _v_ must have the following properties:
 
-Given any such _v_, we define that any value _b_ derived from _v_ by a scoped
-_borrow operation_ must also be an element of _SSA(s)_. We define a borrow
-operation as follows:
+* **Owned values have Independent Availability**: If there exists a value _v'_
+  and point _p_ in _f_ such that _Availability(v')(p)_ implies
+  _Availability(v)(p)_, then there must exist a point _p'_ in _f_ that is not
+  reachable from the definition of _v'_ but for which _Availability(v)(p)_ is
+  true.
 
-* **Borrowed values have Dependent Availability**: Given a value _v_, a borrow
-operation defines a new value _b_ whose availability depends on _v_'s within the
-scope in which _b_ is available. This dependence is enforced by _b_ having the
-property that if _Availability(v)(p)_ is false, then _Availability(b)(p)_ must
-also be false.
+* **Owned values are Mortal**: There must exist a set of "consuming" uses,
+  _Consume(v)_, of _v_ that joint-post dominate all other uses of _v_ and after
+  which _v_ is no longer available.
 
-* **Borrowed values have Scoped Availability**: Is joint-post dominated by a set
-of _end borrow_ operations that after which _b_ is no longer available.
+* **Owned values are consumed exactly once**: _f_ is ill formed if there exists
+  a program path in between any uses _u_, _u'_ in _Consume(v)_.
 
-Since _SSA(s)_ is closed under borrow operations, a natural equivalence
-class structure arises if one considers the elements of _SSA(s)_ that are
-derived via nested borrowed operations from the same underlying value to be
-equivalent. For our purposes, we wish to model semantics where there is only one
-such dominating value, so we restrict our definition of semantic values by
-stating that given any semantic value _s_ there must exist a single static value
-_D(s)_ in _SSA(s)_ that dominates all other _v_ in _SSA(s)_. We call this _D(s)_
-an _owned_ value and classify all other _v_ in _SSA(s)_ as _borrowed_ values.
+Given an owned value _o_, we can derive scoped "borrowed" values from _o_ via
+"borrow operations". We require any such _b_ to have the following properties:
 
-Beyond borrow operations, we model a few other types of operations that we
-describe below:
+* **Borrowed values have Dependent Availability**: _b_'s availability must
+depend on _o_'s within the scope in which _b_ is available. This dependence is
+enforced by _b_ having the property that if _Availability(o)(p)_ is false, then
+_Availability(b)(p)_ must also be false.
 
-* **Simple uses**. An instruction that uses a _v_ in _SSA(s)_ and does not
-  affect _v_'s availability as a result of the use.
+* **Borrowed values have Scoped Availability**: _b_ must be joint-post dominated
+by a set of _end borrow_ operations that invalidate _b_.
 
-* **Copy operations**. An instruction that takes in any _v_ in _SSA(s)_ and
-  produces a new _owned_ value _o_ that acts as _D(s)_ for a new semantic value
-  _s'_. Since _s'_ is a different semantic value from _s_, there are no lifetime
-  dependencies in between any elements of _SSA(s)_ or _SSA(s')_.
+Naturally, we can iterative apply additional borrow operations to _b_ to get
+additional _b'_ that have dependent lifetime on _b_ (and thus _o_ as well). An
+owned value and the associated borrow values in OSSA form a _semantic
+value_. Define a _semantic value_, _s_, as a rooted subgraph of the def-use
+graph of _f_ with a singular owned value root, _Root(s)_ and for which the set
+of all non-root values, _Borrow(s)_, are derived from _Root(s)_ via iterative
+borrow operations. Conceptually all values in _s_ refer to the same underlying
+semantic program entity (e.g. a class instance or a struct with non-trivial
+fields). Via corrolaries to our previous definitions, it is easy to see that:
 
-* **Consuming operations**. An instruction that takes in an _owned_ value and
-  invalidates it. Naturally this ends the lifetime of a semantic value since all
-  borrowed values must be at that point unavailable and values can not be
-  resurrected. By contraposition this implies that if a use does not have an
-  empty borrow set, then it can not be consumed. An important corollary of this
-  definition is that since owned values can not be immortal and can not be
-  resurrected, all owned values must necessarily be consumed exactly once along
-  all paths through the program.
+* **Semantic Values can only be used if the root is alive**.
+
+* **Semantic Values have Independent Availability** Independent semantic values
+   _s_, _s'_ must have independent availability. This follows from the
+   independent availability of _Root(s)_ and _Root(s')_.
+
+
+
+1. _Root(s)_ must be available if any _Borrow(s)_ is available. This follows
+   from borrowed values having dependent availability.
+
+2. 
 
 Now that we have our abstract model of Ownership SSA, we define how this is
 implemented in SIL.
@@ -114,7 +116,7 @@ _borrowed_ values. We extend the categorization slightly since in SIL we must
 also consider objc-bridging and trivial values. This results in us classifying
 values in the following four categories:
 
-* **Owned** - _D(s)_ for a semantic value _s_. Just like in our model, we
+* **Owned** - _Root(s)_ for a semantic value _s_. Just like in our model, we
   require _owned_ values to be used by a consuming operation exactly once along
   any program path dominated by its definition.
 
