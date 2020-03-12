@@ -60,8 +60,9 @@ expressable in SIL today and is exposed in a very limited form in the
 Swift language itself via the usage of _read accessor on computed
 properties. Before we get to that though, we need to start at a more
 basic level about how interior pointers are represented in SIL. In
-sum, SIL has a number of instructions for projecting an address out of
-an object. They are (as of the author writing this):
+sum, SIL has a number of instructions for accessing constructing
+interior pointers into different sorts of objects. They are (as of the
+time when the author was writing this document):
 
 1. `project_box` - projects a pointer out of a reference counted box.
 2. `ref_element_addr` - projects a field out of a reference counted class.
