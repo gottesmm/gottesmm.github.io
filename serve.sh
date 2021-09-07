@@ -1,3 +1,3 @@
 #!/bin/bash
 
-bundle exec jekyll serve -w --incremental
+bundle exec jekyll serve -w --incremental --trace
