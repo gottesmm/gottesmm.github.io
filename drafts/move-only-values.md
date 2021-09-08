@@ -1,48 +1,89 @@
 ---
 layout: page
-title: Proposal for adding No Escaping Arguments, Move Only Values, and Move Only Types to Swift
+title: Move Only Values
 categories: draft
 ---
 
-This document contains a proposal to add three features into Swift:
+This document contains a proposal to add a new ``@_moveOnly`` attribute to
+Swift. This will be allowed upon lets, vars, arguments, results, computed
+properties, and fields of class types. This will allow for System programmers to
+have more exact control of the performance of their programs. The general
+outline of our discussion will be:
 
-* No escaping arguments
-* Move only values
-* Move only types
+1. First we introduce the Swift level syntax for the ``@_moveOnly`` attributes
+   and its implications on the Swift level.
 
-The general outline of our discussion will be:
+1. We then discuss how when SIL is OSSA form, move only values are naturally
+   represented as values that due to their type are unable to be passed to copy
+   instructions. We will show how we can use the SIL level type system to
+   maintain this property by using the type system. We will also show how we can
+   handle trivial and address only types with this scheme.
 
-1. We begin by talking about how move only values are naturally represented in
-   SIL when in Ownership SSA (OSSA) form, the type system at the SIL level,
-   introduce the notion of a unique value, and conclude by contrasting Copy on
-   Write (COW) uniqueness with the uniqueness implied by a ``unique value``.
+2. Then we will talk about how this goal of representing move only values as
+   uncopyable values conflicts with the current SILGen implementation since it
+   often times is forced to emit copies. We will introduce a strategy for
+   working around this problem using a new diagnostic pass called **Diagnostic
+   Copy Propagation** that lets us emit copies of move only values in SILGen and
+   then remove those copies as a SIL pass (and emit an error for any that can
+   not be removed).
 
-2. Then we will talk about how the structure of SILGen today forces copies to be
-   emitted in many contexts creating one of the main problems of the bringup
-   that we need to solve and how a a new diagnostic pass called **Diagnostic
-   Copy Propagation** enabled by Ownership SSA will enable us to work around
-   these issues and achieve our goal of move only types without rewriting
-   SILGen.
+3. Then we will introduce the move operator that we will use to end lifetimes of
+   objects at the Swift level. This will require a different diagnostic pass
+   than Diagnostic Copy Propagation.
 
-3. Then we will conclude by outlining a bring up plan that will allow for
-   incremental development of **Diagnostic Copy Propagation** through the
-   implementation of several features that we already want to add to Swift.
+4. Finally, we will conclude by proposing a bring up strategy for this feature.
+
+## The `@_moveOnly` attribute
+
+In order to represent the `@_moveOnly` concept at the Swift level, we use the `@_moveOnly` attribute and allow for it to be placed on let, var bindings, function arguments, return values, as well as class fields. Example:
+
+```
+@_moveOnly let global: Int = ...
+@_moveOnly var global2: Klass = ...
+
+class X {
+  @_moveOnly let x: Int = ...
+}
+
+func foo(@_moveOnly _ x: Klass) -> @_moveOnly Klass {
+  // This is going to be a copy since y isn't marked @_moveOnly.
+  let y = x
+  // This is a move of x into z and x can no longer be used afterwards.
+  @_moveOnly let z = x
+  ...
+}
+```
+
+NOTE: We do not allow for struct fields to be marked `@_moveOnly` since that
+would necessarily imply that the struct itself is a move only type (which we do
+not support yet).
+
+Importantly, we do not actually represent `@_moveOnly` in the type system at the
+Swift level. This ensures that the type checker does not need to know about
+`@_moveOnly` and avoids the many implementation issues around the type checker
+that we discovered with inout types. Instead we:
+
+* Put a bit in TypeBase that signifies that a type is moveOnly. We do not allow
+  for this bit to be set by the type checker and one can not create such a type
+  at the AST level.
+
+* Rely on SILGen and TypeLowering to as appropriate produce values with the
+  moveOnly type so we can enforce no-copying at the SIL level.
+
+Now that we understand how we will represent move only values at the Swift
+level, lets consider the design space below at the SIL level.
 
 ## Representing Move Only Values in SIL
 
 **NOTE:** In the following I am assuming that one has read the [Ownership SSA documentation](https://github.com/apple/swift/blob/main/docs/SIL.rst#id42) in SIL.rst.
 
-**NOTE:** In the following section, I am going to use a straw man type attribute
-(`@move`) to signal that a value (even if normally not move only) is move
-only. Later on I will introduce a new name `unique` at the end of the section
-for `@move` when I talk about type system aspects.
-
 In the following, I first discuss the natural form for representing move only
 values in SIL. Then I talk about how we extend this model from non-trivial
-loadable values to trivial loadable values and address only types. Finally I
-conclude about how `unique` classes and move only fields affect the properties
-of aggregate types in SIL and the result that we call our move only values
-"unique values".
+loadable values to trivial loadable values and address only types.
+
+**NOTE:** In the following section, I am going to use a straw man type attribute
+(`@_moveOnly`) to signal that a value (even if normally not move only) is move
+only. This will just act as a bit on a type at the SIL level.
 
 #### Move Only Values in OSSA
 
@@ -50,18 +91,19 @@ In order for us to represent move only values, we need to first consider what
 their form looks like in SIL. Put simply copies in SIL are represented via
 special instructions (e.x.: `copy_value`) and a move only value in SIL is a SSA
 value that is never passed to such an instruction. Instead, we manipulate the
-value around using forwarding instructions and consuming parameters. Example:
+value by using forwarding instructions, consuming parameters, and consuming
+results. Example:
 
 ```
-sil @move_only_value_example : $@convention(thin) (@owned @move Optional<Klass>) -> () {
-bb0(%0 : @owned $@move Optional<Klass>):
+sil @_moveOnly_only_value_example : $@convention(thin) (@owned @_moveOnly Optional<Klass>) -> () {
+bb0(%0 : @owned $@_moveOnly Optional<Klass>):
   // Inserting a copy_value of %0 will cause the IR verifier to assert!
-  switch_enum %0 : $Optional<Klass>, case #Optional.some: bb1, case #Optional.none: bb2
+  switch_enum %0 : $@_moveOnly Optional<Klass>, case #Optional.some: bb1, case #Optional.none: bb2
 
-bb1(%1 : @owned $@move Klass):
-  %f = function_ref @myFoo2 : $@convention(thin) (@owned @move SubKlass) -> ()
-  %2 = unchecked_ref_cast %1 : $@move Klass to $@move SubKlass
-  apply %f(%2) : $@convention(thin) (@owned @move SubKlass) -> ()
+bb1(%1 : @owned $@_moveOnly Klass):
+  %f = function_ref @myFoo2 : $@convention(thin) (@owned @_moveOnly SubKlass) -> ()
+  %2 = unchecked_ref_cast %1 : $@_moveOnly Klass to $@_moveOnly SubKlass
+  apply %f(%2) : $@convention(thin) (@owned @_moveOnly SubKlass) -> ()
   br bb3
 
 bb2:
@@ -81,18 +123,21 @@ For memory, we can use a similar methodology, banning instructions like
 ``copy_addr`` from copying a "move only value". Example:
 
 ```
-sil @move_only_value_memory_example : $@convention(thin) (@owned @move Optional<Klass>) -> () {
-bb0(%0 : @owned $@move Optional<Klass>):
-  %1 = alloc_stack $@move Optional<Klass>
+sil @_moveOnly_only_value_memory_example : $@convention(thin) (@owned @_moveOnly Optional<Klass>) -> () {
+bb0(%0 : @owned $@_moveOnly Optional<Klass>):
+  %1 = alloc_stack $@_moveOnly Optional<Klass>
+
   // Store using a move...
-  store %0 to [init] %1 : $*@move Optional<Klass>
+  store %0 to [init] %1 : $*@_moveOnly Optional<Klass>
+
   // load [take] is legal here. A load [copy] would be illegal and would cause the IR
   // verifier to assert.
-  %3 = load [take] %1 : $*@move Optional<Klass>
-  store %3 to [init] %1 : $*@move Optional<Klass>
-  %2 = alloc_stack $@move Optional<Klass>
+  %3 = load [take] %1 : $*@_moveOnly Optional<Klass>
+  store %3 to [init] %1 : $*@_moveOnly Optional<Klass>
+
+  %2 = alloc_stack $@_moveOnly Optional<Klass>
   // IR verifier would assert if this did not have a [take].
-  copy_addr [take] %1 to [initialization] %2 : $*@move Optional<Klass>
+  copy_addr [take] %1 to [initialization] %2 : $*@_moveOnly Optional<Klass>
   ...
 }
 ```
@@ -110,10 +155,10 @@ ensure that beyond temporaries generated by SILGen, move only values will be
 passed around as loadable values:
 
 ```
-sil [ossa] @opaque_value_move_only : $@convention(thin) <T> (@in @move T) -> @out @move T {
-bb0(%0 : @owned $@move T):
-  %3 = function_ref @opaque_copy : $@convention(thin) <T> (@in_guaranteed @move T) -> @out @move T
-  %4 = apply %3<T>(%2) : $@convention(thin) <T> (@in_guaranteed @move T) -> @out @move T
+sil [ossa] @opaque_value_move_only : $@convention(thin) <T> (@in @_moveOnly T) -> @out @_moveOnly T {
+bb0(%0 : @owned $@_moveOnly T):
+  %3 = function_ref @opaque_copy : $@convention(thin) <T> (@in_guaranteed @_moveOnly T) -> @out @_moveOnly T
+  %4 = apply %3<T>(%2) : $@convention(thin) <T> (@in_guaranteed @_moveOnly T) -> @out @_moveOnly T
   destroy_value %0 : $T
   return %4 : $T
 }
@@ -123,7 +168,7 @@ bb0(%0 : @owned $@move T):
 values in SIL, we must work around the invariant in SIL that only non-trivial
 values can be copied. In order to prevent breaking these invariants, we will
 introduce a new SIL instruction that can be used to convert a trivial value into
-a non-trivial value by adding the ``@move`` attribute to the type. As a straw
+a non-trivial value by adding the ``@_moveOnly`` attribute to the type. As a straw
 man (since we have not talked about `unique` yet), we will call the instruction
 ``make_move_only`` in the following example. In order to ensure that we do not
 hurt performance, we will lower away the ``make_move_only`` instruction when we
@@ -133,96 +178,28 @@ occur. Example:
 ```
 sil [ossa] @trivial_value_move_only : $@convention(thin) (Int) -> () {
 bb0(%0 : $Int):
-  // %1 is a non-trivial value of type $@move Int
-  %1 = make_move_only %0 : $Int
+  // %1 is a non-trivial value of type $@_moveOnly Int
+  %1 = make_moveOnly %0 : $Int
 
   %f = function_ref @trivial_use : $@convention(thin) (Int) -> ()
-  // We can only pass %0 (not %1) to %f since %f expects an Int, not an @move Int.
+  // We can only pass %0 (not %1) to %f since %f expects an Int, not an @_moveOnly Int.
   apply %f(%0) : $@convention(thin) (Int) -> ()
 
-  %f2 = function_ref @trivial_move_only_use : $@convention(thin) (@owned @move Int) -> ()
-  // We can pass both %0 and %1 to %f2 since we allow for $Int to be passed as an @owned @move Int value.
-  apply %f2(%0) : $@convention(thin) (@owned @move Int) -> ()
-  apply %f2(%1) : $@convention(thin) (@owned @move Int) -> ()
+  %f2 = function_ref @trivial_move_only_use : $@convention(thin) (@owned @_moveOnly Int) -> ()
+  // We can pass both %0 and %1 to %f2 since we allow for $Int to be passed as an @owned @_moveOnly Int value.
+  apply %f2(%0) : $@convention(thin) (@owned @_moveOnly Int) -> ()
+  apply %f2(%1) : $@convention(thin) (@owned @_moveOnly Int) -> ()
   ...
 }
 ```
 
-By using opaque values and the ``make_move_only`` instruction, we are able to
+By using opaque values and the ``make_moveOnly`` instruction, we are able to
 recast introducing move only values for these two sorts of values in terms of
 non-trivial loadable values simplifying the implementation.
 
-#### Move Only Values, Aggregates, and Unique Classes
+## SILGen, the "Ensure Plus One Problem", and Copying Move Only Values
 
-In SIL, all aggregates (e.x.: struct, tuple, enum) have properties that flow up
-from the fields of the aggregate to the parent aggregate type to enable
-composition. As an example, an aggregate that contains an address only type or a
-non-trivial type must itself be an address only type or non-trivial type
-respectively. The notion of being "move only" must follow a similar scheme.
-
-To explore this, consider what a "move only" class would be. Naturally a "move
-only" class in SIL must be a class that can never be copied implying that the
-class must always be "unique" (i.e.: have a reference count of 1) at all program
-points. Such a class we call a ``unique`` class.
-
-**NOTE:** We are using ``unique`` in a different sense than the way ``unique``
-has typically been used in Swift with reference to COW types. See [Unique Values
-vs Unique COW Values](#discussion-unique-values-vs-unique-cow-values) below for
-a discussion of the differences in between the two concepts.
-
-Lets now consider a ``struct`` that contains a ``unique class``:
-
-```
-unique class MyKlass { ... }
-
-struct MyKlassWrapper {
-  let k: MyKlass
-}
-```
-
-the natural property that ``MyKlassWrapper`` must preserve in order for
-``MyKlass`` to maintain its uniqueness property is that ``MyKlassWrapper`` too
-must never be copied at the SIL level since copying an aggregate in SIL is
-equivalent to copying each of its underlying fields. Thus we must conclude that
-any aggregate that contains a ``unique class`` must also be move only to ensure
-that the ``unique class`` property its preserved. Such a value we call a
-``unique value`` and mark it with the ``unique`` keyword:
-
-```
-unique class MyKlass { ... }
-
-unique struct MyKlassWrapper {
-  let k: MyKlass
-}
-```
-
-If one follows this definition recursively, easily any aggregate that contains a
-``unique value`` must also be unique. Importantly that restriction does not
-propagate downwards through the type tree since a non-unique value contained
-within a unique aggregate can always be moved when the aggregate is moved as
-well.
-
-**NOTE:** Form here on in this proposal, rather than using the term "move only",
-we will use the term "unique".
-
-#### Discussion: Unique Values vs Unique COW Values
-
-One source of confusion that has occurred in discussions around unique values is
-their relationship with unique COW values. To put it simply, a value being
-unique in a value sense is a stricter condition than uniqueness in terms of Copy
-On Write. As an example, a unique COW type is allowed to be escape into an
-unknown function that retains/releases the COW type as long as after we return
-from the function, the COW type is again unique. In contrast, a ``unique value``
-must be guaranteed to never have its reference count touched in the callee
-function. Importantly this means that if we transition COW types to model
-uniqueness using unique value semantics, we do not break ABI requirements since
-when we recompile code to use the new unique semantics, the stricter uniqueness
-properties will ensure that upon return from a callee, uniqueness is always
-preserved.
-
-## SILGen, the "Ensure Plus One Problem", and Copying Unique Values
-
-#### Problem Statement
+#### Problem: SILGen assumes all values are copyable
 
 A characteristic of SILGen today is that parts of SILGen have been written to
 assume +0 and others +1 values causing SILGen to have to transition in between
@@ -237,7 +214,7 @@ different approach to solve our problem that /works around/ SILGen's current
 behavior. Luckily for us a recent technical advance in OSSA SIL can help us to
 escape from our predicament: Copy Propagation.
 
-#### Copy Propagation
+#### Solution: Use Copy Propagation!
 
 As a result of implementing Ownership SSA (OSSA) in SIL, the Swift compiler can
 now infer correct lifetimes at compile time of loadable typed values based off
@@ -253,37 +230,215 @@ using a move only type! This transformation is called **Copy Propagation** and
 is currently implemented just for optimization purposes in a SILOptimizer pass
 called **Performance Copy Propagation**. To get a visual sense of how this pass
 works in action, see the section below called [Performance Copy Propagation in
-Action](#reference-performance-copy-propagation-in-action).  The authors believe
-with a little bit of work, rather than re-implementing a large part of SILGen,
-we can take advantage of this technique to implement move only types despite
-SILGen by:
+Action](#reference-performance-copy-propagation-in-action). The authors have
+refactored the underlying implementation into a prototype diagnostic pass called
+**Diagnostic Copy Propagation** that we can use to implement support for move
+only values in Swift!
 
-* Allowing for move only values to be copied in Raw SIL by instructions like
-  ``copy_value``.
+To do so, we allow for values with the "moveOnly" bit set to be copied when we
+are in Raw SIL. We run Diagnostic Copy Propagation on move only arguments, apply
+results, and the result of all ``make_moveOnly`` instructions. The pass will
+eliminate any of the extra copies that SILGen inserts and will emit errors in
+any situation where semantically a copy is required to make the IR correct. Example:
 
-* Still banning values from being copies using memory instructions like
-  ``copy_addr``/``load [copy]``. This simplifies the problem and will force
-  copies to always be emitted at the value level (that is a ``load [take]`` +
-  ``copy_value`` would still be legal. This simplifies the problem.
+```
+sil [ossa] @flag_double_consume_of_move_value : $@convention(thin) (@owned Klass) -> () {
+bb0(%0 : @owned $Klass):
+  %1 = make_moveOnly %0 : $Klass // expected-error \{\{'x' consumed more than once}}
+  debug_value %1 : $@_moveOnly Klass, let, name "x"
+  %2 = copy_value %1 : $@_moveOnly Klass
+  %f = function_ref @consume_move_only_value : $@convention(thin) (@owned @_moveOnly Klass) -> ()
+  // expected-note @-1 \{\{consuming use}}
+  apply %f(%2) : $@convention(thin) (@owned @_moveOnly Klass) -> ()
+  // expected-note @-1 \{\{consuming use}}
+  apply %f(%1) : $@convention(thin) (@owned @_moveOnly Klass) -> ()
+  %9999 = tuple()
+  return %9999 : $()
+}
+```
 
-* Introducing a new SIL instruction called ``explicit_copy_value``. This will
-  ensure that the user can if they so choose emit an explicit copy without
-  breaking the move only property of the IR.
+## The move operator
 
-* Implementing a new diagnostic pass called **Diagnostic Constant Propagation**
-  that uses the copy propagation infrastructure to rewrite all copies of such
-  values and emit diagnostics when we would need to insert copies. The pass
-  would know the specific uses that caused the copy to be needed and would be
-  able to emit an error/fixit at the place where the copy would be needed. The
-  fixit if used would cause an ``explicit_copy_value`` instruction to be used at
-  that place ensuring legality.
+One thing that we wish to get out of this work is the creation of a move
+operator. For moveOnly values, this is equivalent to ending the lifetime of the
+value, e.x.:
 
-* Once **Diagnostic Constant Propagation** has run, all move only types will be
-  guaranteed to only be copied by ``explicit_copy_value`` instructions.
+```
+@_moveOnly let x = ...
+let _ = move(x) // Ends the lifetime of x
+```
+
+Additionally, we want to be able to have something similar for copyable
+values. This will necessarily imply a different analysis since we want to ensure
+that when we move a copyable value, there aren't any further copyable
+values. This ensures that we can move a copyable value into a move only value
+and not have to worry about the copyable value having further uses later in the
+code. Example:
+
+```
+let x = Klass()
+@_moveOnly let y = move(x)
+// Illegal to use x after this point.
+```
+
+## Bring up
+
+I outline the bringup strategy below:
+
+* Introduce the moveOnly attributes for let, var, params. Done.
+* Introduce a Builtin that can be used to emit make_moveOnly. Done.
+* Use make_moveOnly builtin to bringup the move only value checker. Done.
+* Implement function return attributes and use that to define @_moveOnly there. In progress.
+* Implement Type System support for SIL level types that can be marked as moveOnly. Done.
+* Implement SILGen/TypeLowering support for loading moveOnly values and converting the type as appropriate. Not Done.
+* Implement the move operator and the copyable analysis.
+* Prepare a toolchain to give to stakeholders to try out the moveOnly attributes and get feedback. Not done.
+
+<!--0
+## Move Only Values in Swift
+
+We propose introducing the addition of a new ``@_moveOnly`` attribute that can be
+applied in the following places:
+
+* Local and global let, var bindings.
+* Function arguments and return values.
+* Computed properties.
+* Class fields.
+
+An example of this in practice is:
+
+```
+```
+
+Some important notes:
+
+* By using attributes in this way, we are avoiding the need to have the AST
+  level of the Swift level type system know anything about what a move only
+  value is. Importantly this means that there will not be any effect on the
+  TypeChecker at the Swift level. It also means that one will not be able to
+  overload a function over whether or not an argument or result is move only.
+
+* Once we are at the SIL level, it is important for instructions to be able to
+  propagate around if a value's type is move only. As shown above, the natural
+  way to do this is by using a bit on the type. To do so, we introduce a bit on
+  TypeBase that means that a type is moveOnly, but to ensure that we do not
+  violate the previous bullet point, we only allow for this to be done once we
+  are at the SIL level.
+  
+* We specifically do not propose allowing for stored struct fields to be marked
+  as ``@_moveOnly`` since that would imply that the struct itself would need to
+  be a move only type. This is not an issue for enums or tuples since they can
+  not have a payload or element marked with the ``@_moveOnly`` attribute.
+-->
+<!--
+As part of doing this we 
+
+Usage of such attributes would for the first time expose ``@_moveOnly`` semantics
+ in Swift. All of these three places can act as a ``@_moveOnly`` binding by
+ adding the ``@_moveOnly`` annotation to the binding. Example:
+
+```
+sil hidden [ossa] @$s2ex20access_field_exampleyyF : $@convention(thin) () -> () {
+bb0:
+  %0 = metatype $@thick Klass.Type
+  // function_ref Klass.head.unsafeMutableAddressor
+  %1 = function_ref @$s2ex5KlassC4headACvau : $@convention(thin) () -> Builtin.RawPointer // user: %2
+  %2 = apply %1() : $@convention(thin) () -> Builtin.RawPointer // user: %3
+  %3 = pointer_to_address %2 : $Builtin.RawPointer to [strict] $*Klass // user: %4
+  %4 = begin_access [read] [dynamic] %3 : $*Klass // users: %6, %5
+  %5 = load [copy] %4 : $*Klass                   // users: %19, %8, %7
+  %6 = move_value %5 : $*Klass
+  end_access %4 : $*Klass                         // id: %6
+  debug_value %6 : $@_moveOnly Klass, let, name "x"          // id: %7
+  %8 = begin_borrow %5 : $@_moveOnly Klass                   // users: %16, %12, %10, %9
+  %9 = class_method %8 : $@_moveOnly Klass, #Klass.next!getter : (Klass) -> () -> Klass?, $@convention(method) (@guaranteed Klass) -> @owned Optional<Klass> // user: %10
+  %10 = apply %9(%8) : $@convention(method) (@guaranteed Klass) -> @owned Optional<Klass> // user: %11
+  switch_enum %10 : $Optional<Klass>, case #Optional.some!enumelt: bb2, case #Optional.none!enumelt: bb1 // id: %11
+
+bb1:                                              // Preds: bb0
+  end_borrow %8 : $Klass                          // id: %12
+  br bb3                                          // id: %13
+
+// %14                                            // users: %17, %15
+bb2(%14 : @owned $Klass):                         // Preds: bb0
+  debug_value %14 : $Klass, let, name "y"         // id: %15
+  end_borrow %8 : $Klass                          // id: %16
+  destroy_value %14 : $Klass                      // id: %17
+  br bb3                                          // id: %18
+
+bb3:                                              // Preds: bb2 bb1
+  destroy_value %5 : $Klass                       // id: %19
+  %20 = tuple ()                                  // user: %21
+  return %20 : $()                                // id: %21
+} // end sil function '$s2ex20access_field_exampleyyF'
+```
+-->
+
+<!--
+
+## The Bringup Plan
+
+The overall bringup plan is as follows:
+
+* 
+
+only value semantics from SILGen to the back of the compiler. We will describe
+eac
+
+* Add a bit of information to SILType that would state if a type was
+  ``@_moveOnly``. This is necessary to ensure that SIL optimization passes know
+  that they must preserve the ``@_moveOnly`` property of a value and not perform
+  optimizations that depend on inserting copies for correctness.
+
+* Only allow for a type to be ``@_moveOnly`` if it is a loadable type. This means
+  that initially, ``@_moveOnly`` would not be able to be used in generic code or
+  with existentials. Once we have opaque values though, the implementation
+  should be easy to bring up so such code will follow the same pattern.
+
+* Allowing for ``@_moveOnly`` typed values to be copied in when SIL is in the Raw
+  stage by instructions like ``copy_value``. Once we are in Canonical SIL, the
+  IR verifier will begin asserting if one of these instructions has an operand
+  that is a ``@_moveOnly`` typed value. This guarantees that once we have
+  Canonical SIL, a ``@_moveOnly`` typed value can be proven as never copied.
+
+* Banning copying of ``@_moveOnly`` when performing direct operations on
+  memory. Example: ``copy_addr, copy_addr [initialization], load [copy]``. To
+  copy an address ``@_moveOnly`` value, one must instead perform a ``load
+  [take]`` and copy the value as an object. This simplifies our ability to
+  verify code by ensuring that all copy operations are actually on values,
+  ensuring that we only need an object verifier.
+
+* If a user wishes to escape a value from the `@_moveOnly` jail, they must either
+  implement their own deep copy function or use a special SIL instruction
+  ``remove_moveOnly`` that unsafely escapes the `@_moveOnly` value and removes
+  the type bit.
+
+* TypeLowering will be modified to map ``@_moveOnly T`` arguments and local
+  bindings to a Box-like wrapper type called a ``MoveOnlySILType``. This would
+  just wrap an underlying type and would act as the extra bit of information
+  that SILGen can use to emit ``@_moveOnly T`` code.
+
+* SILGen will need to be modified such that any 
+
+* Implementing a new diagnostic pass called **Diagnostic Copy Propagation** that
+  uses the copy propagation infrastructure to rewrite all copies of such values
+  and emit diagnostics when we would need to insert copies. The pass would know
+  the specific uses that caused the copy to be needed and would be able to emit
+  an error that explains which uses imply the need for a copy. We /could/ also
+  add a fixit, but looking at other languages like Rust, it seems that such
+  functionality was removed from the borrow checker since it was usually the
+  wrong answer to a problem. To give good diagnostics to address scenarios where
+  we are copying a var into a var, we will add special logic such that when we
+  run **Diagnostic Copy Propagation**
+
+* Once **Diagnostic Copy Propagation** has run, all move only types will be
+  guaranteed to no longer be copied.
 
 * Finally, once we are in Canonical SIL (after all diagnostic passes have run),
   we will then enforce the IR constraints via the verifier that a ``copy_value``
-  can never be used on a move only value.
+  can never be used on a move only value. NOTE: This means that passes after
+  Diagnostic Copy Propagation will need to preserve the property created by
+  **Diagnostic Copy Propagation**.
 
 This will provide a flexible implementation that will let us achieve our goals
 for being able to represent a value that is never copied without needing to
@@ -291,9 +446,16 @@ rewrite large parts of SILGen.
 
 ## The Bringup Plan
 
-Now that we have a methodology for accomplishing our goals, the natural question
+Now that we have a methodology for accomplishing our goals, the natural
+questions to ask are:
 
-**JOEG/ANDY END OF INITIAL PART**
+* What do we want this feature to actually look like at the source level?
+
+* What are our goals, non-goals, and anti-goals for this feature?
+
+* In what ways can we incrementally bring up such a feature since we are using a
+  new technique that has never been used before in the compiler (Copy
+  Propagation for Diagnostics).
 
 ## Reference: Performance Copy Propagation in Action
 
@@ -472,6 +634,7 @@ value. Example:
 Moves in this model are represented via the notion of a forwarding 
 
 
+-->
 
 
 
@@ -541,8 +704,7 @@ Moves in this model are represented via the notion of a forwarding
 
 
 
-
-## Introduction: Diagnostic Copy Propagation
+### Reference: Performance Copy Propagation
 
 As a result of implementing Ownership SSA (OSSA) in SIL, the Swift compiler can
 now infer the lifetimes at compile time of loadable typed values based off of
@@ -697,6 +859,7 @@ theoretical pass I am going to refer to as "Diagnostic Copy Propagation" (DCP).
 be consumed twice, leaked, and all uses of the value are within the OSSA
 lifetime.
 
+<!--
 ----
 
 Attendees: TimK, JohnMc, JoeG, DougG, MichaelG
@@ -742,21 +905,21 @@ As a quick online of this section, I start by describing the design from the SIL
 
 The natural way to represent a move only value in SIL is as a non-trivial loadable value that can not be copied with a normal copy_value. This is because in SIL the notion of being copied is inherently tied to a value being non-trivial since we do not track ownership for trivial values. The ownership of the non-trivial value flows through the entire SIL program via the def→use graph and thus we can write a diagnostic pass based off of copy propagation to infer if a copy is needed somewhere in the program and give a fixit to the user at that spot to insert an explicit copy if they want:
 
-sil @move_only : $@convention(thin) (@owned @move Klass, @guaranteed @move Klass) -> () {
-bb0(%0 : @owned @move Klass, %1 : @guaranteed @move Klass):
+sil @_moveOnly_only : $@convention(thin) (@owned @_moveOnly Klass, @guaranteed @_moveOnly Klass) -> () {
+bb0(%0 : @owned @_moveOnly Klass, %1 : @guaranteed @_moveOnly Klass):
   // Safe, can never be copied.
-  apply %f(%0) : $@convention(thin) (@guaranteed @move Klass) -> ()
+  apply %f(%0) : $@convention(thin) (@guaranteed @_moveOnly Klass) -> ()
   // This is an explicit copy that copy propagation left alone. We treat it as
   // a TrivialUse (meaning an ignorable one) that produces an owned value.
   %3 = explicit_copy %0
   // Error! Diagnostic constant propagation says we need a copy here.
   // Display fixit telling the user that a copy is needed here due to use at SourceLoc()
-  apply %f2(%1) : $@convention(thin) (@owned @move Klass) -> ()
+  apply %f2(%1) : $@convention(thin) (@owned @_moveOnly Klass) -> ()
   // No error, we are passing off our value, moving it.
-  apply %f3(%0) : $@convention(thin) (@owned @move Klass) -> ()
+  apply %f3(%0) : $@convention(thin) (@owned @_moveOnly Klass) -> ()
   // Error! Diagnostic Propagation knows %0 was already destroyed by %f2. We 
   // emit as part of the fixit that we need to put our copy before the call to %f3.
-  apply %f4(%0) : $@convention(thin) (@owned @move Klass) -> ()
+  apply %f4(%0) : $@convention(thin) (@owned @_moveOnly Klass) -> ()
 }
 
 This model will make the life of programmers easier since we are not just throwing an error, we are also telling them actionable information to fix the issue!
@@ -1014,21 +1177,21 @@ Specifically, a unique value is /ok/ with being copied as long as before the fun
 +
 +The natural way to represent a move only value in SIL is as a non-trivial loadable value that can not be copied with a normal copy_value. This is because in SIL the notion of being copied is inherently tied to a value being non-trivial since we do not track ownership for trivial values. The ownership of the non-trivial value flows through the entire SIL program via the def→use graph and thus we can write a diagnostic pass based off of copy propagation to infer if a copy is needed somewhere in the program and give a fixit to the user at that spot to insert an explicit copy if they want:
 +
-+sil @move_only : $@convention(thin) (@owned @move Klass, @guaranteed @move Klass) -> () {
-+bb0(%0 : @owned @move Klass, %1 : @guaranteed @move Klass):
++sil @_moveOnly_only : $@convention(thin) (@owned @_moveOnly Klass, @guaranteed @_moveOnly Klass) -> () {
++bb0(%0 : @owned @_moveOnly Klass, %1 : @guaranteed @_moveOnly Klass):
 +  // Safe, can never be copied.
-+  apply %f(%0) : $@convention(thin) (@guaranteed @move Klass) -> ()
++  apply %f(%0) : $@convention(thin) (@guaranteed @_moveOnly Klass) -> ()
 +  // This is an explicit copy that copy propagation left alone. We treat it as
 +  // a TrivialUse (meaning an ignorable one) that produces an owned value.
 +  %3 = explicit_copy %0
 +  // Error! Diagnostic constant propagation says we need a copy here.
 +  // Display fixit telling the user that a copy is needed here due to use at SourceLoc()
-+  apply %f2(%1) : $@convention(thin) (@owned @move Klass) -> ()
++  apply %f2(%1) : $@convention(thin) (@owned @_moveOnly Klass) -> ()
 +  // No error, we are passing off our value, moving it.
-+  apply %f3(%0) : $@convention(thin) (@owned @move Klass) -> ()
++  apply %f3(%0) : $@convention(thin) (@owned @_moveOnly Klass) -> ()
 +  // Error! Diagnostic Propagation knows %0 was already destroyed by %f2. We 
 +  // emit as part of the fixit that we need to put our copy before the call to %f3.
-+  apply %f4(%0) : $@convention(thin) (@owned @move Klass) -> ()
++  apply %f4(%0) : $@convention(thin) (@owned @_moveOnly Klass) -> ()
 +}
 +
 +This model will make the life of programmers easier since we are not just throwing an error, we are also telling them actionable information to fix the issue!
