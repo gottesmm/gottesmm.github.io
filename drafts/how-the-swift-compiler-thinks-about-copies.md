@@ -44,8 +44,8 @@ doSomethingElse()
 
 To the compiler this actually looks like the following two directed graph:
 
-[image](how-the-swift-compiler-thinks-about-copies-img1.png)
-[image](how-the-swift-compiler-thinks-about-copies-img2.png)
+![image](/images/how-the-swift-compiler-thinks-about-copies-img1.png){: .lhs-image-small }
+![image](/images/how-the-swift-compiler-thinks-about-copies-img2.png){: .rhs-image-small }
 
 The left hand side graph is what the compiler sees before it would insert any
 destroys. Looking at that graph, the compiler would look at the uses of x and
@@ -75,8 +75,8 @@ doSomethingElse()
 In this case, rather than having a destroy of x after secondUse, we will instead
 pass off x to consume at +1 yielding the following graph on the LHS:
 
-[image](how-the-swift-compiler-thinks-about-copies-img3.png)
-[image](how-the-swift-compiler-thinks-about-copies-img4.png)
+![image](/images/how-the-swift-compiler-thinks-about-copies-img3.png){: .lhs-image-small }
+![image](/images/how-the-swift-compiler-thinks-about-copies-img4.png){: .rhs-image-small }
 
 the compiler is able to know that it should do this since it knows from the
 signature of consume that its first parameter is __owned meaning it is at +1.
