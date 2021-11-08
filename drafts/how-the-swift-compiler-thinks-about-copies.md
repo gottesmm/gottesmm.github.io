@@ -1,6 +1,6 @@
 ---
 layout: page
-title: How the Swift compiler thinks about Copy Insertion
+title: How the Swift Compiler thinks about Copy Insertion
 categories: draft
 ---
 
