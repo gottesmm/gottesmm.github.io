@@ -17,7 +17,7 @@ In Swift today, one is unable to end the lifetime of a binding and move its
 contents into a different binding. With this in mind, the Swift team is adding a
 new special function to Swift called `move`. `move` is inspired by functionality
 like `drop` from other languages like Rust. To work with `move`, one applies
-`move` to a binding. move will then invalidate the binding and emit an error if
+`move` to a binding. `move` will then invalidate the binding and emit an error if
 one uses the binding ever again in the case of a let like construct (`let` or
 `__owned` arg) or if one uses the binding before reinitializing it for a var
 like binding (`var`, `inout`, `mutating self`). As a simple example, consider a
