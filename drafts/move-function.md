@@ -1,7 +1,7 @@
 ---
 layout: page
 title: An Introduction to the Move Function in Swift for System Programmers
-categories: draft
+categories: complete
 ---
 
 NOTE: In the following the word binding is referring to a `let` or a `var` like
