@@ -262,3 +262,13 @@ public struct WebURL {
   }
 }
 ```
+
+In conclusion, the `move` function as shown above provides a new tool for Swift
+programmers to precisely manipulate the lifetimes of values and control value
+uniqueness in a way that was not possible before. The compile time performance
+guarantees provided by `move` will allow for system programmers to have
+confidence that the code as written will perform well without needing to worry
+about whether or not the optimizer kicked in. The author of the document hopes
+that this new tool in the Swift system programmer tool box will enable the
+flowering of new programs written in Swift providing benefit to the wider
+community of computer users.
